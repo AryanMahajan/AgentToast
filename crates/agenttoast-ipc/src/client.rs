@@ -6,31 +6,22 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::debug;
 
 /// Send a message to the AgentToast daemon and wait for a response.
-///
-/// This is the main function used by bridge scripts.
 pub async fn send_to_daemon(
     pipe_name: &str,
     auth_token: &str,
     message: &IpcMessage,
 ) -> Result<IpcResponse> {
-    let stream = connect(pipe_name).await?;
+    #[cfg(windows)]
+    let stream = connect_windows(pipe_name).await?;
+    
+    #[cfg(unix)]
+    let stream = connect_unix(pipe_name).await?;
+
     exchange(stream, auth_token, message).await
 }
 
-/// Connect to the daemon's IPC endpoint.
 #[cfg(windows)]
-async fn connect(pipe_name: &str) -> Result<tokio::net::windows::named_pipe::ClientOptions> {
-    // On Windows, we need to use a different approach - return the connected client
-    unreachable!("Use send_to_daemon_windows instead")
-}
-
-/// Send a message and receive a response over a connected stream.
-#[cfg(windows)]
-pub async fn send_to_daemon_windows(
-    pipe_name: &str,
-    auth_token: &str,
-    message: &IpcMessage,
-) -> Result<IpcResponse> {
+async fn connect_windows(pipe_name: &str) -> Result<tokio::net::windows::named_pipe::NamedPipeClient> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
     let client = ClientOptions::new()
@@ -42,7 +33,19 @@ pub async fn send_to_daemon_windows(
             )
         })?;
 
-    exchange(client, auth_token, message).await
+    Ok(client)
+}
+
+#[cfg(unix)]
+async fn connect_unix(socket_path: &str) -> Result<tokio::net::UnixStream> {
+    tokio::net::UnixStream::connect(socket_path)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to connect to AgentToast daemon at {}. Is the daemon running?",
+                socket_path
+            )
+        })
 }
 
 /// Exchange a message with the daemon over an established connection.
@@ -77,17 +80,4 @@ where
         .with_context(|| format!("Failed to parse daemon response: {}", response_line.trim()))?;
 
     Ok(response)
-}
-
-/// Connect to the daemon's IPC endpoint (Unix).
-#[cfg(unix)]
-async fn connect(socket_path: &str) -> Result<tokio::net::UnixStream> {
-    tokio::net::UnixStream::connect(socket_path)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to connect to AgentToast daemon at {}. Is the daemon running?",
-                socket_path
-            )
-        })
 }

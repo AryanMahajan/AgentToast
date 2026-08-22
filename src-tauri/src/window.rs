@@ -29,6 +29,7 @@ pub fn show_toast(
         .skip_taskbar(true)
         .focused(false)
         .transparent(true)
+        .visible(false)
         .build()?;
 
     // Position in bottom-right corner

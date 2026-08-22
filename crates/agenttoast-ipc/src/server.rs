@@ -3,11 +3,9 @@
 //! On Windows, uses named pipes.
 //! On Unix, uses Unix domain sockets.
 
-use crate::auth;
 use crate::protocol::{IpcMessage, IpcResponse};
 use agenttoast_core::config::AppConfig;
 use anyhow::{Context, Result};
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};

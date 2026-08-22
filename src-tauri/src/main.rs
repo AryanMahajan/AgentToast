@@ -62,6 +62,7 @@ fn main() {
             commands::get_pending_events,
             commands::respond_to_event,
             commands::dismiss_event,
+            commands::close_window,
         ])
         .setup(|app| {
             // Set up system tray

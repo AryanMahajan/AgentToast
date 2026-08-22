@@ -13,6 +13,24 @@ listen('attention-event', (e) => {
     renderToast(currentEvent);
 });
 
+// Fetch any events that were emitted before we started listening
+async function fetchPending() {
+    try {
+        const sessions = await invoke('get_pending_events');
+        if (sessions && sessions.length > 0) {
+            // Find a session with a pending attention request
+            const session = sessions.find(s => s.attention_request);
+            if (session) {
+                currentEvent = session.attention_request;
+                renderToast(currentEvent);
+            }
+        }
+    } catch (e) {
+        console.error("Failed to fetch pending events:", e);
+    }
+}
+fetchPending();
+
 // Render the toast notification
 function renderToast(event) {
     const title = document.getElementById('toast-title');
@@ -123,8 +141,13 @@ document.getElementById('toast-close').addEventListener('click', async () => {
 // Close the toast window
 async function closeToast() {
     if (timerInterval) clearInterval(timerInterval);
-    const appWindow = getCurrentWebviewWindow();
-    await appWindow.close();
+    if (currentEvent) {
+        try {
+            await invoke('close_window', { eventId: currentEvent.event_id });
+        } catch (e) {
+            console.error("Failed to close window:", e);
+        }
+    }
 }
 
 // Start a timer showing how long the agent has been waiting

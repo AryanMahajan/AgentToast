@@ -65,3 +65,12 @@ pub async fn dismiss_event(
     state.router.cancel(&event_uuid).await;
     Ok(())
 }
+
+/// Close the toast window from the frontend.
+#[tauri::command]
+pub fn close_window(
+    app: tauri::AppHandle,
+    event_id: String,
+) -> Result<(), String> {
+    crate::window::close_toast(&app, &event_id).map_err(|e| e.to_string())
+}

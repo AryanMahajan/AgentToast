@@ -1,4 +1,8 @@
 //! AgentToast Bridge for Claude Code
+//!
+//! This binary is invoked by Claude Code's hook system.
+//! It reads the hook payload from stdin, sends it to the AgentToast daemon,
+//! waits for the user's response, and writes the response to stdout.
 
 use agenttoast_adapters::claude::ClaudeAdapter;
 use agenttoast_adapters::AgentAdapter;
@@ -20,7 +24,7 @@ async fn main() {
         .init();
 
     if let Err(e) = run().await {
-        error!(error = %e, "Bridge failed");
+        error!(error = ?e, "Bridge failed");
         std::process::exit(1);
     }
 }
@@ -57,16 +61,6 @@ async fn run() -> Result<()> {
         event: event.clone(),
     };
 
-    #[cfg(windows)]
-    let response = agenttoast_ipc::client::send_to_daemon_windows(
-        &config.ipc.pipe_name,
-        &auth_token,
-        &ipc_message,
-    )
-    .await
-    .context("Failed to communicate with AgentToast daemon")?;
-
-    #[cfg(unix)]
     let response = agenttoast_ipc::client::send_to_daemon(
         &config.ipc.pipe_name,
         &auth_token,

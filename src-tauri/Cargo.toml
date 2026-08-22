@@ -1,0 +1,21 @@
+[package]
+name = "agenttoast"
+version.workspace = true
+edition.workspace = true
+description = "AgentToast — Cross-agent attention & action router"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+agenttoast-core = { path = "../crates/agenttoast-core" }
+agenttoast-ipc = { path = "../crates/agenttoast-ipc" }
+agenttoast-adapters = { path = "../crates/agenttoast-adapters" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"

@@ -1,0 +1,13 @@
+[package]
+name = "agenttoast-adapters"
+version.workspace = true
+edition.workspace = true
+description = "Agent-specific adapters for AgentToast"
+
+[dependencies]
+agenttoast-core = { path = "../agenttoast-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

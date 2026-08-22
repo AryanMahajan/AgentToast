@@ -1,0 +1,18 @@
+# AgentToast default configuration
+
+[ipc]
+# Named pipe path (Windows) or Unix socket path
+pipe_name = "\\\\.\\pipe\\agenttoast"
+
+[escalation]
+# Whether to send reminder notifications
+enabled = true
+# Reminder intervals in seconds
+reminder_intervals = [120, 300, 600]
+# Maximum reminders (0 = unlimited)
+max_reminders = 0
+# Play sound on reminder
+sound_on_reminder = true
+
+# Bridge timeout in seconds (how long to wait for user response)
+bridge_timeout = 600

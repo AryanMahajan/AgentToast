@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "crates/agenttoast-core",
+    "crates/agenttoast-ipc",
+    "crates/agenttoast-adapters",
+    "crates/agenttoast-bridge-claude",
+    "src-tauri",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["AgentToast Contributors"]
+license = "MIT"
+repository = "https://github.com/AryanMahajan/claude_notifier"
+description = "Cross-agent attention & action router for AI coding agents"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"

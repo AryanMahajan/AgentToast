@@ -1,0 +1,19 @@
+# Rust build output
+target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+.agenttoast/
+auth_token
+
+# Node modules (if any frontend build tools are added)
+node_modules/

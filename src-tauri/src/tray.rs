@@ -2,7 +2,7 @@
 
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App,
 };
 use tracing::info;
@@ -15,6 +15,19 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let _tray = TrayIconBuilder::new()
         .menu(&menu)
         .tooltip("AgentToast — Monitoring agent sessions")
+        // Left-clicking the tray icon opens the dashboard. Hiding a toast
+        // leaves its request pending, so there has to be an obvious way back
+        // to it that is quicker than hunting through a menu.
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                crate::window::show_dashboard(tray.app_handle());
+            }
+        })
         .on_menu_event(|app, event| match event.id.as_ref() {
             "quit" => {
                 info!("Quit requested from tray");

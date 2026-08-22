@@ -69,7 +69,7 @@ pub struct ClaudeHookResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PreToolUseOutput {
     pub hook_event_name: &'static str,
-    /// `allow`, `deny`, or `escalate` (hand the decision back to the user).
+    /// `allow`, `deny`, or `ask` (hand the decision back to the user).
     pub permission_decision: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_decision_reason: Option<String>,
@@ -132,12 +132,14 @@ impl AgentAdapter for ClaudeAdapter {
             ),
             // The user chose to deal with it in the terminal instead, so hand
             // the decision back rather than silently answering on their behalf.
+            // Must be "ask": the accepted values are allow / ask / deny, and
+            // anything else fails Claude Code's output validation outright.
             ActionType::OpenSession => ClaudeHookResponse::new(
-                "escalate",
+                "ask",
                 Some("User opted to decide in the session".to_string()),
             ),
             ActionType::SendText => ClaudeHookResponse::new(
-                "escalate",
+                "ask",
                 text.map(|t| format!("User replied: {}", t)),
             ),
         };
@@ -217,10 +219,40 @@ mod tests {
     /// "Open session" means the user wants to decide in the terminal, so the
     /// decision goes back to them rather than being answered on their behalf.
     #[test]
-    fn open_session_escalates() {
+    fn open_session_asks() {
         let out = ClaudeAdapter.format_response(ActionType::OpenSession, None).unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "escalate");
+        assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "ask");
+    }
+
+    /// Claude Code validates this field against a fixed set and rejects the
+    /// whole hook output otherwise — a wrong value shows up as
+    /// "Hook JSON output validation failed", not as a silently ignored click.
+    #[test]
+    fn every_action_uses_an_accepted_decision() {
+        const ACCEPTED: [&str; 3] = ["allow", "ask", "deny"];
+
+        for action in [
+            ActionType::Approve,
+            ActionType::Deny,
+            ActionType::Confirm,
+            ActionType::Reject,
+            ActionType::SendText,
+            ActionType::OpenSession,
+        ] {
+            let out = ClaudeAdapter.format_response(action.clone(), None).unwrap();
+            let parsed: Value = serde_json::from_str(&out).unwrap();
+            let decision = parsed["hookSpecificOutput"]["permissionDecision"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert!(
+                ACCEPTED.contains(&decision.as_str()),
+                "{:?} produced unaccepted decision {:?}",
+                action,
+                decision
+            );
+        }
     }
 
     #[test]

@@ -110,6 +110,16 @@ pub async fn dismiss_event(
     Ok(())
 }
 
+/// Take a toast off screen without answering it.
+///
+/// Closing a toast is "not now", not "decide without me": the request stays
+/// pending and the agent stays blocked until it is answered here or from the
+/// dashboard.
+#[tauri::command]
+pub fn hide_toast(app: tauri::AppHandle, event_id: String) {
+    crate::window::hide_toast(&app, &event_id);
+}
+
 /// Close the toast window from the frontend.
 #[tauri::command]
 pub fn close_window(
@@ -117,6 +127,31 @@ pub fn close_window(
     event_id: String,
 ) -> Result<(), String> {
     crate::window::close_toast(&app, &event_id).map_err(|e| e.to_string())
+}
+
+/// Re-open the toast for a request that was hidden.
+///
+/// Hiding a toast leaves the request pending and the agent blocked, so there
+/// has to be a way to pull it back without answering from the dashboard.
+#[tauri::command]
+pub async fn reopen_toast(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    event_id: String,
+) -> Result<(), String> {
+    let event_uuid = Uuid::parse_str(&event_id).map_err(|e| format!("Invalid event ID: {}", e))?;
+
+    let event = state
+        .sessions
+        .all()
+        .await
+        .into_iter()
+        .filter_map(|s| s.attention_request)
+        .find(|e| e.event_id == event_uuid)
+        .ok_or_else(|| "That request is no longer pending".to_string())?;
+
+    crate::window::restore(&app, &event);
+    Ok(())
 }
 
 /// PID of the agent process that owns the session behind `event_id`.

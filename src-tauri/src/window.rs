@@ -53,6 +53,9 @@ const DASHBOARD_LABEL: &str = "dashboard";
 struct ToastSlot {
     label: String,
     card_h: f64,
+    /// Hidden toasts keep their slot (so the event stays answerable) but take
+    /// up no room in the stack.
+    visible: bool,
 }
 
 /// The ordered bottom-right toast stack. Oldest first; the newest toast sits
@@ -78,9 +81,10 @@ fn origin_for(app: &AppHandle, slots: &[ToastSlot], index: usize) -> Option<(f64
     // The card's right edge sits PAD_R in from the window's right edge.
     let x = right - EDGE_R - (WIN_W - PAD_R);
 
-    // Everything newer than this slot is stacked below it.
+    // Everything newer *and on screen* is stacked below it.
     let below: f64 = slots[index + 1..]
         .iter()
+        .filter(|s| s.visible)
         .map(|s| s.card_h + STACK_GAP)
         .sum();
 
@@ -94,6 +98,9 @@ fn origin_for(app: &AppHandle, slots: &[ToastSlot], index: usize) -> Option<(f64
 /// resized to its measured height, or removed.
 fn relayout(app: &AppHandle, slots: &[ToastSlot]) {
     for (i, slot) in slots.iter().enumerate() {
+        if !slot.visible {
+            continue;
+        }
         let Some(window) = app.get_webview_window(&slot.label) else {
             continue;
         };
@@ -125,6 +132,7 @@ pub fn show_toast(
         slots.push(ToastSlot {
             label: label.clone(),
             card_h: PROVISIONAL_CARD_H,
+            visible: true,
         });
         origin_for(app, &slots, slots.len() - 1)
     };
@@ -250,18 +258,90 @@ pub fn prewarm<R: tauri::Runtime, M: Manager<R>>(app: &M) {
 /// slipped behind another window is exactly the problem AgentToast exists to
 /// solve. Re-assert the window and let the frontend pulse (and optionally
 /// chime) rather than stacking up duplicate toasts for the same event.
-pub fn remind(app: &AppHandle, event_id: &str, sound: bool) {
-    let label = format!("toast-{}", event_id);
+pub fn remind(app: &AppHandle, event: &AttentionEvent, sound: bool) {
+    let label = format!("toast-{}", event.event_id);
+
+    // A hidden toast still has a blocked agent behind it, so a reminder has to
+    // put it back on screen rather than nudging something nobody can see.
+    if !restore(app, event) {
+        return;
+    }
+
     let Some(window) = app.get_webview_window(&label) else {
         return;
     };
 
-    let _ = window.show();
     let _ = window.set_always_on_top(true);
     let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
 
     use tauri::Emitter;
     let _ = window.emit("toast-reminder", sound);
+}
+
+/// Take a toast off screen without answering it.
+///
+/// The window is hidden rather than destroyed: the request stays pending, the
+/// rendered card is kept, and restoring it is just a `show`. Its stack slot is
+/// marked hidden so the remaining toasts close the gap.
+pub fn hide_toast(app: &AppHandle, event_id: &str) {
+    let label = format!("toast-{}", event_id);
+
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.hide();
+    }
+
+    let stack = app.state::<ToastStack>();
+    let mut slots = stack.0.lock().unwrap();
+    if let Some(slot) = slots.iter_mut().find(|s| s.label == label) {
+        slot.visible = false;
+    }
+    relayout(app, &slots);
+    info!(event_id = %event_id, "Toast hidden; request still pending");
+}
+
+/// Put a hidden toast back on screen, recreating it if its window is gone.
+///
+/// Returns whether a toast for this event is now showing.
+pub fn restore(app: &AppHandle, event: &AttentionEvent) -> bool {
+    let label = format!("toast-{}", event.event_id);
+
+    let Some(window) = app.get_webview_window(&label) else {
+        // No window at all — build a fresh one.
+        info!(event_id = %event.event_id, "Recreating a closed toast");
+        if let Err(e) = show_toast(app, event) {
+            warn!(error = %e, "Failed to recreate toast");
+            return false;
+        }
+        return true;
+    };
+
+    {
+        let stack = app.state::<ToastStack>();
+        let mut slots = stack.0.lock().unwrap();
+        if let Some(slot) = slots.iter_mut().find(|s| s.label == label) {
+            slot.visible = true;
+        }
+        relayout(app, &slots);
+    }
+
+    let _ = window.show();
+
+    // A window handle can outlive the native window it refers to, in which case
+    // `show` silently does nothing. Confirm the toast is actually back, and
+    // rebuild it from scratch if not.
+    if window.is_visible().unwrap_or(false) {
+        return true;
+    }
+
+    warn!(event_id = %event.event_id, "Stale toast window; rebuilding");
+    let _ = window.destroy();
+    match show_toast(app, event) {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(error = %e, "Failed to rebuild toast");
+            false
+        }
+    }
 }
 
 /// Open the dashboard, or focus it if it is already open.

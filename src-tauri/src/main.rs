@@ -66,6 +66,8 @@ fn main() {
             commands::respond_to_event,
             commands::dismiss_event,
             commands::toast_ready,
+            commands::reopen_toast,
+            commands::hide_toast,
             commands::close_window,
         ])
         .setup(|app| {

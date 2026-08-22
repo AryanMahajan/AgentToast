@@ -170,7 +170,9 @@ function startTimer(seconds) {
     }
     timer.hidden = false;
     el('card').style.setProperty('--timer-dur', `${seconds}s`);
-    el('timer-fill').addEventListener('animationend', () => dismiss(), { once: true });
+    // Only non-blocking states carry a timer, so letting it run out
+    // decides nothing.
+    el('timer-fill').addEventListener('animationend', () => hide(), { once: true });
 }
 
 /* ---------------------------------------------------------------- reveal --- */
@@ -220,15 +222,32 @@ async function respond(actionType, textInput) {
     closeToast();
 }
 
-// Dismiss without answering: the agent falls back to its own prompt.
-async function dismiss() {
-    if (!currentEvent || closing) return;
+// Hide the toast without answering it.
+//
+// Deliberately does NOT cancel the request: the agent stays blocked and the
+// event stays pending, so it can still be answered from the dashboard. Closing
+// a toast is "not now", not "decide without me".
+async function hide() {
+    if (closing) return;
+    closing = true;
+    if (timeInterval) clearInterval(timeInterval);
+
+    el('card').classList.remove('enter');
+    el('card').classList.add('leave');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
     try {
-        await invoke('dismiss_event', { eventId: currentEvent.event_id });
-    } catch (error) {
-        console.error('Failed to dismiss:', error);
+        // Hidden, not closed: the window survives so a reminder or the
+        // dashboard can put this exact card straight back on screen.
+        await invoke('hide_toast', { eventId: EVENT_ID });
+    } catch (e) {
+        console.error('Failed to hide toast:', e);
     }
-    closeToast();
+
+    // Ready to be shown again.
+    closing = false;
+    el('card').classList.remove('leave');
+    el('card').classList.add('enter');
 }
 
 async function closeToast() {
@@ -247,10 +266,10 @@ async function closeToast() {
     }
 }
 
-el('close').addEventListener('click', dismiss);
+el('close').addEventListener('click', hide);
 
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') dismiss();
+    if (e.key === 'Escape') hide();
 });
 
 /* -------------------------------------------------------------- reminder --- */

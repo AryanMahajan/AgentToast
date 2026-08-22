@@ -134,6 +134,25 @@ function renderRequest(request) {
         actions.appendChild(btn);
     }
 
+    // A hidden toast leaves the agent blocked with nothing on screen, so offer
+    // an explicit way to pull it back rather than only answering from here.
+    const spacer = document.createElement('span');
+    spacer.style.flex = '1';
+    actions.appendChild(spacer);
+
+    const reopen = document.createElement('button');
+    reopen.type = 'button';
+    reopen.className = 'btn btn-ghost';
+    reopen.textContent = 'Show toast';
+    reopen.addEventListener('click', async () => {
+        try {
+            await invoke('reopen_toast', { eventId: request.event_id });
+        } catch (e) {
+            console.error('Failed to reopen toast:', e);
+        }
+    });
+    actions.appendChild(reopen);
+
     box.appendChild(actions);
     return box;
 }

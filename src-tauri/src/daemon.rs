@@ -138,7 +138,7 @@ async fn handle_attention(
                     reminder = reminders_sent,
                     "Re-surfacing unanswered attention event"
                 );
-                window::remind(app, &event_id.to_string(), escalation.sound_on_reminder);
+                window::remind(app, &event, escalation.sound_on_reminder);
             }
         }
     };
@@ -153,6 +153,10 @@ async fn handle_attention(
 
             // Clear the attention state
             state.sessions.clear_attention(&session_id).await;
+
+            // The answer may have come from the dashboard, leaving this event's
+            // toast hidden but alive. Nothing is waiting on it now.
+            let _ = window::close_toast(app, &event_id.to_string());
 
             // Send response back to the bridge
             let ipc_response = IpcResponse::UserAction {

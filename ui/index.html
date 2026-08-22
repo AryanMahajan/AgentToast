@@ -7,19 +7,45 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="toast-container">
-        <div class="toast" id="toast">
-            <div class="toast-header">
-                <div class="toast-icon" id="toast-icon">⚡</div>
-                <div class="toast-title" id="toast-title">Agent needs attention</div>
-                <button class="toast-close" id="toast-close" title="Dismiss">×</button>
+    <!-- The stage padding is the transparent gutter the drop shadow and the
+         slide-in translate live in; it matches PAD_* in src-tauri/src/window.rs. -->
+    <div class="stage">
+        <div class="toast" id="card">
+            <div class="card-row">
+                <div class="avatar-wrap">
+                    <div class="avatar" id="avatar">C</div>
+                    <div class="status-dot" id="status-dot"></div>
+                </div>
+
+                <div class="card-col">
+                    <div class="meta">
+                        <span class="agent" id="agent">Claude Code</span>
+                        <span class="meta-sep"></span>
+                        <span class="status" id="status">Working</span>
+                        <span class="grow"></span>
+                        <span class="time" id="time">now</span>
+                    </div>
+
+                    <div class="task" id="task">Waiting for the agent…</div>
+                    <div class="log" id="log" hidden></div>
+
+                    <div class="progress" id="progress" hidden>
+                        <div class="track"><div class="track-fill" id="track-fill"></div></div>
+                        <span class="pct" id="pct">0%</span>
+                    </div>
+
+                    <div class="indeterminate" id="indeterminate" hidden>
+                        <div class="indeterminate-bar"></div>
+                    </div>
+
+                    <div class="footer" id="footer" hidden></div>
+                </div>
+
+                <button type="button" class="close" id="close" aria-label="Dismiss">&times;</button>
             </div>
-            <div class="toast-body">
-                <p class="toast-message" id="toast-message">Loading...</p>
-                <p class="toast-context" id="toast-context"></p>
-            </div>
-            <div class="toast-actions" id="toast-actions">
-                <!-- Buttons will be dynamically inserted -->
+
+            <div class="timer" id="timer" hidden>
+                <div class="timer-fill" id="timer-fill"></div>
             </div>
         </div>
     </div>

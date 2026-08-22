@@ -13,3 +13,4 @@ chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 dirs = "6"
+toml = "0.9"

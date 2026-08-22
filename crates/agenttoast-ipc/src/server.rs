@@ -41,6 +41,12 @@ pub async fn start_server(
 }
 
 /// Windows named pipe server implementation.
+///
+/// Follows the standard overlapped-pipe accept loop: the next instance is
+/// created *before* the connected one is handed off to a task. Creating it
+/// afterwards leaves a window with no listening instance, during which a
+/// bridge that connects gets ERROR_FILE_NOT_FOUND — reported to the user as
+/// "is the daemon running?" even though it is.
 #[cfg(windows)]
 async fn run_pipe_server(
     pipe_name: &str,
@@ -49,21 +55,30 @@ async fn run_pipe_server(
 ) -> Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
-    loop {
-        let server = ServerOptions::new()
-            .first_pipe_instance(false)
-            .create(pipe_name)
-            .with_context(|| format!("Failed to create named pipe: {}", pipe_name))?;
+    // Claiming the first instance stops another process from creating a pipe
+    // of this name first and impersonating the daemon.
+    let mut server = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(pipe_name)
+        .with_context(|| format!("Failed to create named pipe: {}", pipe_name))?;
 
+    loop {
         info!("Waiting for IPC connection...");
         server.connect().await?;
         info!("IPC client connected");
+
+        // Stand up the replacement instance before handing this one off, so
+        // the pipe name is continuously listenable.
+        let next = ServerOptions::new()
+            .create(pipe_name)
+            .with_context(|| format!("Failed to create named pipe: {}", pipe_name))?;
+        let connected = std::mem::replace(&mut server, next);
 
         let token = auth_token.to_string();
         let tx = event_tx.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(server, &token, tx).await {
+            if let Err(e) = handle_connection(connected, &token, tx).await {
                 error!(error = %e, "Connection handler error");
             }
         });

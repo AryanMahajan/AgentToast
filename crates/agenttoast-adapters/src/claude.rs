@@ -18,13 +18,73 @@ pub struct ClaudeHookPayload {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub tool_input: Option<Value>,
+    /// Working directory of the session. Present on every hook event.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Which hook fired. Present on every event; used to tell a permission
+    /// request apart from a session lifecycle notification.
+    #[serde(default)]
+    pub hook_event_name: Option<String>,
+}
+
+/// What a hook payload is asking AgentToast to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookKind {
+    /// A tool wants permission — raise a toast and block on the answer.
+    Attention,
+    /// A session started — record it in the registry.
+    SessionStart,
+    /// A session ended — drop it from the registry.
+    SessionEnd,
+}
+
+impl HookKind {
+    /// Classify a payload by its `hook_event_name`.
+    ///
+    /// Anything unrecognised is treated as an attention request: that is the
+    /// behaviour the hook config has always had, and erring toward showing a
+    /// toast is better than silently swallowing an event.
+    pub fn from_payload(payload: &Value) -> Self {
+        match payload.get("hook_event_name").and_then(|v| v.as_str()) {
+            Some("SessionStart") => HookKind::SessionStart,
+            Some("SessionEnd") => HookKind::SessionEnd,
+            _ => HookKind::Attention,
+        }
+    }
+}
+
+/// A `PreToolUse` hook result.
+///
+/// Claude Code takes the decision from `hookSpecificOutput.permissionDecision`;
+/// the older top-level `decision` field is not read for this event, so emitting
+/// it means the hook has no effect and the tool call just falls through to the
+/// normal permission prompt.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeHookResponse {
+    pub hook_specific_output: PreToolUseOutput,
 }
 
 #[derive(Debug, Serialize)]
-pub struct ClaudeHookResponse {
-    pub decision: String,
+#[serde(rename_all = "camelCase")]
+pub struct PreToolUseOutput {
+    pub hook_event_name: &'static str,
+    /// `allow`, `deny`, or `escalate` (hand the decision back to the user).
+    pub permission_decision: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub permission_decision_reason: Option<String>,
+}
+
+impl ClaudeHookResponse {
+    fn new(decision: &'static str, reason: Option<String>) -> Self {
+        Self {
+            hook_specific_output: PreToolUseOutput {
+                hook_event_name: "PreToolUse",
+                permission_decision: decision,
+                permission_decision_reason: reason,
+            },
+        }
+    }
 }
 
 impl AgentAdapter for ClaudeAdapter {
@@ -55,30 +115,31 @@ impl AgentAdapter for ClaudeAdapter {
         if let Some(input) = &hook_data.tool_input {
             event.context = Some(serde_json::to_string_pretty(input).unwrap_or_default());
         }
+        event.cwd = hook_data.cwd;
 
         Ok(event)
     }
 
-    fn format_response(&self, action: ActionType, _text: Option<&str>) -> Result<String> {
+    fn format_response(&self, action: ActionType, text: Option<&str>) -> Result<String> {
         let response = match action {
-            ActionType::Approve | ActionType::Confirm => ClaudeHookResponse {
-                decision: "approve".to_string(),
-                reason: None,
-            },
-            ActionType::Deny | ActionType::Reject => ClaudeHookResponse {
-                decision: "deny".to_string(),
-                reason: Some("Denied by user via AgentToast".to_string()),
-            },
-            ActionType::OpenSession => {
-                ClaudeHookResponse {
-                    decision: "approve".to_string(),
-                    reason: None,
-                }
-            }
-            ActionType::SendText => ClaudeHookResponse {
-                decision: "approve".to_string(),
-                reason: None,
-            },
+            ActionType::Approve | ActionType::Confirm => ClaudeHookResponse::new(
+                "allow",
+                Some("Approved by user via AgentToast".to_string()),
+            ),
+            ActionType::Deny | ActionType::Reject => ClaudeHookResponse::new(
+                "deny",
+                Some("Denied by user via AgentToast".to_string()),
+            ),
+            // The user chose to deal with it in the terminal instead, so hand
+            // the decision back rather than silently answering on their behalf.
+            ActionType::OpenSession => ClaudeHookResponse::new(
+                "escalate",
+                Some("User opted to decide in the session".to_string()),
+            ),
+            ActionType::SendText => ClaudeHookResponse::new(
+                "escalate",
+                text.map(|t| format!("User replied: {}", t)),
+            ),
         };
 
         serde_json::to_string(&response).context("Failed to serialize Claude hook response")
@@ -120,5 +181,61 @@ fn build_message(tool_name: &str, tool_input: &Option<Value>) -> String {
             "Claude wants to edit a file".to_string()
         }
         _ => format!("Claude wants to use tool: {}", tool_name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Claude Code reads the decision from `hookSpecificOutput.permissionDecision`.
+    /// A top-level `decision` field is ignored for PreToolUse, which would make
+    /// every toast click a no-op, so pin the exact shape.
+    #[test]
+    fn approve_emits_permission_decision_allow() {
+        let out = ClaudeAdapter.format_response(ActionType::Approve, None).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+
+        assert_eq!(parsed["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "allow");
+        assert!(parsed.get("decision").is_none(), "legacy field must not be emitted");
+    }
+
+    #[test]
+    fn deny_emits_permission_decision_deny_with_reason() {
+        let out = ClaudeAdapter.format_response(ActionType::Deny, None).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+
+        assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert!(parsed["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("AgentToast"));
+    }
+
+    /// "Open session" means the user wants to decide in the terminal, so the
+    /// decision goes back to them rather than being answered on their behalf.
+    #[test]
+    fn open_session_escalates() {
+        let out = ClaudeAdapter.format_response(ActionType::OpenSession, None).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "escalate");
+    }
+
+    #[test]
+    fn bash_payload_becomes_permission_request() {
+        let payload = json!({
+            "session_id": "s1",
+            "tool_name": "Bash",
+            "tool_input": { "command": "npm run migrate" }
+        });
+
+        let event = ClaudeAdapter.parse_hook_payload(&payload).unwrap();
+
+        assert_eq!(event.session_id, "s1");
+        assert_eq!(event.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(event.message, "Claude wants to run: npm run migrate");
+        assert_eq!(event.state, agenttoast_core::SessionState::WaitingForPermission);
     }
 }

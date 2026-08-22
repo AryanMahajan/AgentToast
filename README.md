@@ -54,7 +54,7 @@ cargo tauri dev
 
 ### Configure Claude Code Hooks
 
-Add to your `~/.claude/settings.json`:
+Add to your `~/.claude/settings.json` (or copy `config/hooks/claude-hooks.json`):
 
 ```json
 {
@@ -63,16 +63,51 @@ Add to your `~/.claude/settings.json`:
       {
         "matcher": ".*",
         "hooks": [
-          {
-            "type": "command",
-            "command": "agenttoast-bridge-claude"
-          }
+          { "type": "command", "command": "agenttoast-bridge-claude" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          { "type": "command", "command": "agenttoast-bridge-claude" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "agenttoast-bridge-claude" }
         ]
       }
     ]
   }
 }
 ```
+
+The same binary handles all three: it dispatches on `hook_event_name`.
+`PreToolUse` raises a toast and blocks on your answer; `SessionStart` and
+`SessionEnd` only keep the session registry up to date and never block.
+
+### Configuration
+
+All settings are optional. Copy `config/default.toml` to
+`~/.agenttoast/config.toml` and edit what you need:
+
+```toml
+# How long the bridge waits for you before deferring to the agent's own prompt
+bridge_timeout = 600
+
+[escalation]
+enabled = true
+reminder_intervals = [120, 300, 600]  # seconds
+max_reminders = 0                     # 0 = unlimited
+sound_on_reminder = true
+```
+
+An unanswered toast is re-surfaced on the `reminder_intervals` schedule, since
+the agent stays blocked until you answer.
 
 ## Architecture
 

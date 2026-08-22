@@ -17,3 +17,6 @@ auth_token
 
 # Node modules (if any frontend build tools are added)
 node_modules/
+
+# Tauri generated schemas
+src-tauri/gen/schemas/

@@ -94,17 +94,18 @@ async fn handle_attention(
     // Register the event and get a channel that will receive the user's response
     let response_rx = state.router.register(&event).await;
 
-    // Auto-register session if not already known
+    // Auto-register the session if the SessionStart hook is not configured, or
+    // if the daemon was started midway through a session.
     if state.sessions.get(&session_id).await.is_none() {
         let agent_type = match event.agent.as_str() {
             "claude" => AgentType::ClaudeCode,
             "agy" => AgentType::Antigravity,
             other => AgentType::Custom(other.to_string()),
         };
-        state
-            .sessions
-            .register(Session::new(&session_id, agent_type))
-            .await;
+        let mut session = Session::new(&session_id, agent_type);
+        session.working_directory = event.cwd.clone();
+        session.process_id = event.process_id;
+        state.sessions.register(session).await;
     }
 
     // Mark session as needing attention
@@ -118,8 +119,31 @@ async fn handle_attention(
     // Emit event to frontend
     let _ = app.emit("attention-event", &event);
 
-    // Wait for the user's response (this blocks until the user clicks a button)
-    match response_rx.await {
+    // Wait for the user's response, nudging them on the configured schedule
+    // while the agent stays blocked. `oneshot::Receiver` is Unpin, so it can be
+    // polled by reference across loop iterations.
+    let escalation = state.config.escalation.clone();
+    let mut response_rx = response_rx;
+    let mut reminders_sent: u32 = 0;
+
+    let outcome = loop {
+        let wait = escalation.interval_for_reminder(reminders_sent as usize);
+
+        tokio::select! {
+            result = &mut response_rx => break result,
+            _ = tokio::time::sleep(wait), if escalation.should_remind(reminders_sent) => {
+                reminders_sent += 1;
+                info!(
+                    event_id = %event_id,
+                    reminder = reminders_sent,
+                    "Re-surfacing unanswered attention event"
+                );
+                window::remind(app, &event_id.to_string(), escalation.sound_on_reminder);
+            }
+        }
+    };
+
+    match outcome {
         Ok(user_response) => {
             info!(
                 event_id = %event_id,

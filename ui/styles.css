@@ -1,164 +1,487 @@
-* {
+/* AgentToast — notification surface.
+   Tokens and geometry from the "Agent toasts, light and dark" design.
+   Follows the system theme; an opaque card floating over the desktop. */
+
+*,
+*::before,
+*::after {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
 }
 
+/* Author `display` rules outrank the UA stylesheet's [hidden] { display:none },
+   so rows like .progress and .footer would stay visible when hidden. */
+[hidden] {
+    display: none !important;
+}
+
+/* Light tokens. Every colour is defined here so the dark block below only has
+   to redefine, never introduce. Hex fallbacks precede each oklch value for
+   WebView2 builds that predate oklch support. */
+:root {
+    --surface: #fcfcfd;
+    --border: rgba(0, 0, 0, 0.09);
+    --border-strong: rgba(0, 0, 0, 0.22);
+    --fg: #16171a;
+    --fg2: #565a61;
+    --fg3: #8a8e96;
+    --fill: rgba(0, 0, 0, 0.045);
+    --fill-hover: rgba(0, 0, 0, 0.085);
+    --input: #ffffff;
+    --track: rgba(0, 0, 0, 0.1);
+    --avatar: #ffffff;
+    --dot-ring: #fafafc;
+    --shadow: 0 14px 34px rgba(20, 22, 28, 0.18), 0 2px 6px rgba(20, 22, 28, 0.1);
+
+    --accent: #4c5fd7;
+    --accent: oklch(0.55 0.16 264);
+    --accent-on: #ffffff;
+    --ok: #1f8a5f;
+    --ok: oklch(0.55 0.13 158);
+    --warn: #9a6f14;
+    --warn: oklch(0.6 0.13 72);
+    --err: #c33a2e;
+    --err: oklch(0.55 0.18 25);
+
+    /* Geometry — kept in sync with the PAD_* / CARD_W constants in
+       src-tauri/src/window.rs, which size and anchor the window. */
+    --card-w: 372px;
+    --pad-l: 26px;
+    --pad-r: 44px;
+    --pad-t: 30px;
+    --pad-b: 30px;
+
+    --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+    --font-small: 'Segoe UI Variable Small', 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --surface: #2a2b31;
+        --border: rgba(255, 255, 255, 0.1);
+        --border-strong: rgba(255, 255, 255, 0.28);
+        --fg: #f3f4f6;
+        --fg2: #a9adb6;
+        --fg3: #7b8089;
+        --fill: rgba(255, 255, 255, 0.07);
+        --fill-hover: rgba(255, 255, 255, 0.12);
+        --input: rgba(0, 0, 0, 0.3);
+        --track: rgba(255, 255, 255, 0.12);
+        --avatar: rgba(255, 255, 255, 0.08);
+        --dot-ring: #2a2b31;
+        --shadow: 0 18px 44px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+
+        --accent: #8098f8;
+        --accent: oklch(0.7 0.15 264);
+        --accent-on: #141519;
+        --ok: #4ecb8f;
+        --ok: oklch(0.75 0.14 158);
+        --warn: #e0a83c;
+        --warn: oklch(0.8 0.13 80);
+        --err: #f2705f;
+        --err: oklch(0.68 0.17 25);
+    }
+}
+
+/* The window itself is transparent; nothing here may paint an opaque ground
+   or it shows up as a flash before the card renders. */
+html,
 body {
     background: transparent;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
     overflow: hidden;
     user-select: none;
+    cursor: default;
 }
 
-#toast-container {
-    padding: 8px;
-    width: 100%;
-    height: 100%;
+body {
+    font-family: var(--font-ui);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
 }
+
+.stage {
+    width: 100%;
+    padding: var(--pad-t) var(--pad-r) var(--pad-b) var(--pad-l);
+}
+
+/* ---------------------------------------------------------------- card --- */
 
 .toast {
-    background: #1e1e2e;
-    border: 1px solid #313244;
+    position: relative;
+    width: var(--card-w);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--shadow);
     overflow: hidden;
-    animation: slideIn 0.3s ease-out;
-    color: #cdd6f4;
+    /* Held invisible until the frontend has measured itself and the window has
+       been revealed — see toast.js. */
+    opacity: 0;
 }
 
-@keyframes slideIn {
+.toast.enter {
+    animation: toastIn 0.44s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.toast.leave {
+    animation: toastOut 0.12s linear both;
+}
+
+@keyframes toastIn {
     from {
-        transform: translateX(100%);
         opacity: 0;
+        transform: translateX(34px) scale(0.97);
     }
     to {
-        transform: translateX(0);
         opacity: 1;
+        transform: none;
     }
 }
 
-.toast-header {
-    display: flex;
-    align-items: center;
-    padding: 12px 16px 8px;
-    gap: 8px;
+@keyframes toastOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
 }
 
-.toast-icon {
-    font-size: 18px;
-    width: 28px;
-    height: 28px;
+.card-row {
+    display: flex;
+    gap: 11px;
+    padding: 13px 12px 12px 13px;
+}
+
+/* -------------------------------------------------------------- avatar --- */
+
+.avatar-wrap {
+    position: relative;
+    flex: none;
+    width: 32px;
+    height: 32px;
+}
+
+.avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: var(--avatar);
+    border: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #45475a;
-    border-radius: 8px;
+    font: 600 13px/1 var(--font-mono);
+    color: var(--fg2);
 }
 
-.toast-title {
+.status-dot {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid var(--dot-ring);
+    background: var(--tone, var(--accent));
+}
+
+/* ---------------------------------------------------------------- body --- */
+
+.card-col {
     flex: 1;
-    font-size: 13px;
-    font-weight: 600;
-    color: #cdd6f4;
-}
-
-.toast-close {
-    background: none;
-    border: none;
-    color: #6c7086;
-    font-size: 18px;
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 4px;
-    line-height: 1;
-}
-
-.toast-close:hover {
-    background: #45475a;
-    color: #cdd6f4;
-}
-
-.toast-body {
-    padding: 4px 16px 12px;
-}
-
-.toast-message {
-    font-size: 14px;
-    color: #bac2de;
-    line-height: 1.4;
-    word-break: break-word;
-}
-
-.toast-context {
-    font-size: 12px;
-    color: #6c7086;
-    margin-top: 4px;
-    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-    background: #181825;
-    padding: 6px 10px;
-    border-radius: 6px;
-    max-height: 60px;
-    overflow: hidden;
-    display: none;
-}
-
-.toast-context.visible {
-    display: block;
-}
-
-.toast-actions {
+    min-width: 0;
     display: flex;
-    gap: 8px;
-    padding: 0 16px 12px;
+    flex-direction: column;
+    gap: 5px;
 }
 
-.toast-btn {
+.meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.agent,
+.status {
+    font: 600 11.5px/1 var(--font-small);
+    white-space: nowrap;
+}
+
+.agent {
+    color: var(--fg2);
+}
+
+.status {
+    color: var(--tone, var(--accent));
+}
+
+.meta-sep {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--fg3);
+    flex: none;
+}
+
+.grow {
     flex: 1;
-    padding: 8px 16px;
+}
+
+.time {
+    font: 400 11px/1 var(--font-small);
+    color: var(--fg3);
+    white-space: nowrap;
+}
+
+.task {
+    font: 600 13.5px/1.35 var(--font-ui);
+    color: var(--fg);
+    text-wrap: pretty;
+}
+
+.log {
+    margin-top: 1px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    background: var(--fill);
+    font: 400 10.8px/1.3 var(--font-mono);
+    color: var(--fg3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: text;
+    cursor: text;
+}
+
+/* ------------------------------------------------------------ progress --- */
+
+.progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 3px;
+}
+
+.track {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--track);
+    overflow: hidden;
+}
+
+.track-fill {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--accent);
+    width: 0;
+    transition: width 0.2s ease;
+}
+
+.pct {
+    font: 600 10.5px/1 var(--font-mono);
+    color: var(--fg2);
+    flex: none;
+}
+
+.indeterminate {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--track);
+    overflow: hidden;
+    margin-top: 3px;
+}
+
+.indeterminate-bar {
+    width: 38%;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--accent);
+    animation: toastIndet 1.5s ease-in-out infinite;
+}
+
+@keyframes toastIndet {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(360%);
+    }
+}
+
+/* -------------------------------------------------------------- footer --- */
+
+.footer {
+    display: flex;
+    gap: 7px;
+    margin-top: 6px;
+    align-items: center;
+}
+
+.btn {
+    appearance: none;
     border: none;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 500;
+    border-radius: 7px;
+    font: 600 12px/1 var(--font-small);
     cursor: pointer;
-    transition: all 0.15s ease;
+    white-space: nowrap;
+    flex: none;
 }
 
-.toast-btn:active {
-    transform: scale(0.97);
+.btn-primary {
+    background: var(--accent);
+    color: var(--accent-on);
+    padding: 8px 15px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
-.toast-btn.approve {
-    background: #a6e3a1;
-    color: #1e1e2e;
+.btn-primary:hover {
+    filter: brightness(1.08);
 }
 
-.toast-btn.approve:hover {
-    background: #94e2d5;
+.btn-outline {
+    border: 1px solid var(--border);
+    background: var(--fill);
+    color: var(--fg);
+    padding: 8px 15px;
 }
 
-.toast-btn.deny {
-    background: #f38ba8;
-    color: #1e1e2e;
+.btn-outline:hover {
+    background: var(--fill-hover);
 }
 
-.toast-btn.deny:hover {
-    background: #eba0ac;
+.btn-ghost {
+    background: transparent;
+    color: var(--fg3);
+    padding: 8px 6px;
+    font-size: 11.5px;
 }
 
-.toast-btn.secondary {
-    background: #45475a;
-    color: #cdd6f4;
+.btn-ghost:hover {
+    color: var(--fg);
 }
 
-.toast-btn.secondary:hover {
-    background: #585b70;
+.btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
-/* Waiting duration badge */
-.toast-timer {
-    font-size: 11px;
-    color: #6c7086;
-    text-align: center;
-    padding: 4px 16px 10px;
+/* --------------------------------------------------------------- reply --- */
+
+.reply-input {
+    flex: 1;
+    min-width: 0;
+    appearance: none;
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-bottom: 2px solid var(--border-strong);
+    border-radius: 7px;
+    padding: 8px 10px;
+    font: 400 12px/1.2 var(--font-small);
+    color: var(--fg);
+    outline: none;
+    user-select: text;
+}
+
+.reply-input:focus {
+    border-bottom-color: var(--accent);
+}
+
+.reply-input::placeholder {
+    color: var(--fg3);
+}
+
+/* --------------------------------------------------------- close/timer --- */
+
+.close {
+    flex: none;
+    align-self: flex-start;
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--fg3);
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    font: 400 15px/1 var(--font-small);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.close:hover {
+    background: var(--fill);
+    color: var(--fg);
+}
+
+.timer {
+    height: 2px;
+    background: var(--track);
+}
+
+.timer-fill {
+    height: 2px;
+    width: 100%;
+    background: var(--tone, var(--accent));
+    opacity: 0.5;
+    animation: toastTimer linear both;
+    animation-duration: var(--timer-dur, 6s);
+}
+
+/* Hover or focus pauses every timer on the card. */
+.toast:hover .timer-fill,
+.toast:focus-within .timer-fill {
+    animation-play-state: paused;
+}
+
+@keyframes toastTimer {
+    from {
+        width: 100%;
+    }
+    to {
+        width: 0%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .toast.enter {
+        animation-duration: 0.01ms;
+    }
+    .indeterminate-bar {
+        animation: none;
+        width: 100%;
+        opacity: 0.5;
+    }
+}
+
+/* ------------------------------------------------------------ reminder --- */
+
+/* An unanswered toast gets re-asserted on the escalation schedule; the pulse
+   is what draws the eye back to a card that has been sitting there a while. */
+.toast.remind {
+    animation: toastPulse 0.9s ease-in-out 2;
+}
+
+@keyframes toastPulse {
+    0%, 100% {
+        box-shadow: var(--shadow);
+    }
+    50% {
+        box-shadow: var(--shadow), 0 0 0 3px var(--tone, var(--accent));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .toast.remind {
+        animation: none;
+        outline: 2px solid var(--tone, var(--accent));
+        outline-offset: 1px;
+    }
 }

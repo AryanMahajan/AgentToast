@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentToast — Sessions</title>
+    <!-- styles.css carries the shared design tokens; dashboard.css layers the
+         window chrome on top and undoes the toast's transparent ground. -->
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body class="dashboard">
+    <header class="dash-header">
+        <div class="dash-titles">
+            <div class="dash-eyebrow">agenttoast</div>
+            <h1 class="dash-title">Active sessions</h1>
+        </div>
+        <div class="dash-count" id="count">0</div>
+    </header>
+
+    <main class="dash-list" id="list">
+        <p class="dash-empty" id="empty">No active sessions.</p>
+    </main>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>

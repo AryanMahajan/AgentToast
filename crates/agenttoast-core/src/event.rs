@@ -27,6 +27,16 @@ pub struct AttentionEvent {
     /// Tool name that triggered this event (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// Working directory of the agent session, when the hook reports one.
+    /// Lets the daemon register a session with somewhere to "open" it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// PID of the agent process that triggered this event.
+    ///
+    /// Carried on the event rather than looked up later so "Open Session" works
+    /// even when the SessionStart hook is not configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<u32>,
 }
 
 /// An action button that can be presented to the user.
@@ -94,6 +104,8 @@ impl AttentionEvent {
             ],
             timestamp: Utc::now(),
             tool_name,
+            cwd: None,
+            process_id: None,
         }
     }
 
@@ -126,6 +138,8 @@ impl AttentionEvent {
             ],
             timestamp: Utc::now(),
             tool_name: None,
+            cwd: None,
+            process_id: None,
         }
     }
 }

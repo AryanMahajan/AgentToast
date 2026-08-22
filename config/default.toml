@@ -1,4 +1,14 @@
-# AgentToast default configuration
+# AgentToast configuration.
+#
+# Copy this file to ~/.agenttoast/config.toml to override the defaults.
+# Every key is optional; anything omitted keeps its built-in default.
+#
+# Note: keys must appear before the first [table] header to belong to the
+# top level — a bare key placed after [escalation] becomes part of that table.
+
+# How long the bridge waits for you to answer a toast, in seconds. When it
+# expires the bridge writes nothing and the agent falls back to its own prompt.
+bridge_timeout = 600
 
 [ipc]
 # Named pipe path (Windows) or Unix socket path
@@ -13,6 +23,3 @@ reminder_intervals = [120, 300, 600]
 max_reminders = 0
 # Play sound on reminder
 sound_on_reminder = true
-
-# Bridge timeout in seconds (how long to wait for user response)
-bridge_timeout = 600

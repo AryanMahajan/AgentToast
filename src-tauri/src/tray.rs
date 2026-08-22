@@ -22,7 +22,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
             }
             "show" => {
                 info!("Show dashboard requested");
-                // TODO: Open dashboard window
+                crate::window::show_dashboard(app);
             }
             _ => {}
         })

@@ -1,4 +1,4 @@
-//! AgentToast — Cross-agent attention & action router.
+//! AgentToast â€” Cross-agent attention & action router.
 //!
 //! This is the main Tauri application that runs as a system tray daemon.
 //! It listens for attention events from agent bridge scripts via IPC
@@ -8,6 +8,7 @@
 
 mod commands;
 mod daemon;
+mod focus;
 mod tray;
 mod window;
 
@@ -36,7 +37,7 @@ fn main() {
 
     info!("Starting AgentToast v{}", env!("CARGO_PKG_VERSION"));
 
-    let config = AppConfig::default();
+    let config = AppConfig::load();
     let sessions = SessionRegistry::new();
     let router = ActionRouter::new();
 
@@ -57,16 +58,22 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(Arc::new(state))
+        .manage(window::ToastStack::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_sessions,
             commands::get_pending_events,
+            commands::get_event,
             commands::respond_to_event,
             commands::dismiss_event,
+            commands::toast_ready,
             commands::close_window,
         ])
         .setup(|app| {
             // Set up system tray
             tray::setup_tray(app)?;
+
+            // Pay WebView2's one-off startup cost now, not on the first toast.
+            window::prewarm(app);
 
             // Start IPC daemon
             let app_handle = app.handle().clone();
@@ -77,6 +84,18 @@ fn main() {
             info!("AgentToast setup complete");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("Failed to run AgentToast");
+        .build(tauri::generate_context!())
+        .expect("Failed to build AgentToast")
+        .run(|_app, event| {
+            // AgentToast lives in the tray with no persistent window. Tauri
+            // exits once the last window closes, so dismissing the first toast
+            // would otherwise take the daemon down with it. `code` is set only
+            // when something called `app.exit(..)` â€” i.e. the tray's Quit item,
+            // which should still be allowed through.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }

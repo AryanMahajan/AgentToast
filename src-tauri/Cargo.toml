@@ -20,6 +20,9 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+dirs = "6"
 sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 
 [target.'cfg(windows)'.dependencies]

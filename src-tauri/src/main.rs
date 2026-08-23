@@ -9,6 +9,8 @@
 mod commands;
 mod daemon;
 mod focus;
+mod hooks;
+mod install;
 mod tray;
 mod window;
 
@@ -56,7 +58,16 @@ fn main() {
     };
 
     tauri::Builder::default()
+        // Must be registered first. AgentToast owns a single named pipe and a
+        // single tray icon, so a second copy is never useful: it cannot claim
+        // the pipe and just leaves a dead icon behind. Launching it again is
+        // taken as "show me the app" instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            info!("Already running; surfacing the dashboard instead of starting again");
+            window::show_dashboard(app);
+        }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(state))
         .manage(window::ToastStack::default())
         .invoke_handler(tauri::generate_handler![
@@ -68,6 +79,10 @@ fn main() {
             commands::toast_ready,
             commands::reopen_toast,
             commands::hide_toast,
+            commands::bridge_path,
+            commands::hook_status,
+            commands::connect_hooks,
+            commands::disconnect_hooks,
             commands::close_window,
         ])
         .setup(|app| {

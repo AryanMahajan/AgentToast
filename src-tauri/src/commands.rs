@@ -154,6 +154,15 @@ pub async fn reopen_toast(
     Ok(())
 }
 
+/// Where the Claude Code bridge lives, if the app can find it.
+///
+/// Returned as a string so the dashboard can show it, and so the hook config
+/// can be written with an absolute path.
+#[tauri::command]
+pub fn bridge_path(app: tauri::AppHandle) -> Option<String> {
+    crate::install::bridge_path(&app).map(|p| p.display().to_string())
+}
+
 /// The still-pending attention event with this id, if any.
 async fn pending_event(state: &Arc<AppState>, event_id: Uuid) -> Option<AttentionEvent> {
     state
@@ -163,4 +172,67 @@ async fn pending_event(state: &Arc<AppState>, event_id: Uuid) -> Option<Attentio
         .into_iter()
         .filter_map(|s| s.attention_request)
         .find(|e| e.event_id == event_id)
+}
+
+/* ------------------------------------------------------- Claude Code setup --- */
+
+/// Resolve a scope name from the frontend into a real one.
+fn scope_from(scope: &str, project: Option<String>) -> Result<crate::hooks::Scope, String> {
+    match scope {
+        "global" => Ok(crate::hooks::Scope::Global),
+        "project" => project
+            .map(|p| crate::hooks::Scope::Project(std::path::PathBuf::from(p)))
+            .ok_or_else(|| "No project folder was given".to_string()),
+        other => Err(format!("Unknown scope: {}", other)),
+    }
+}
+
+/// Whether Claude Code is currently wired up, globally and for a project.
+#[tauri::command]
+pub fn hook_status(
+    app: tauri::AppHandle,
+    project: Option<String>,
+) -> Result<Vec<crate::hooks::HookStatus>, String> {
+    let bridge = crate::install::bridge_path(&app);
+    let bridge = bridge.as_deref();
+
+    let mut out = vec![crate::hooks::status(&crate::hooks::Scope::Global, bridge)];
+    if let Some(dir) = project {
+        out.push(crate::hooks::status(
+            &crate::hooks::Scope::Project(std::path::PathBuf::from(dir)),
+            bridge,
+        ));
+    }
+    Ok(out)
+}
+
+/// Add AgentToast's hooks to Claude Code's settings.
+#[tauri::command]
+pub fn connect_hooks(
+    app: tauri::AppHandle,
+    scope: String,
+    project: Option<String>,
+) -> Result<crate::hooks::HookStatus, String> {
+    let bridge = crate::install::bridge_path(&app).ok_or_else(|| {
+        "Could not find the AgentToast bridge. If this is a development build, \
+         run `cargo build --workspace` first."
+            .to_string()
+    })?;
+
+    let scope = scope_from(&scope, project)?;
+    let status = crate::hooks::connect(&scope, &bridge)?;
+    tracing::info!(path = %status.path, bridge = %bridge.display(), "Connected Claude Code");
+    Ok(status)
+}
+
+/// Remove AgentToast's hooks, leaving everything else in the file untouched.
+#[tauri::command]
+pub fn disconnect_hooks(
+    scope: String,
+    project: Option<String>,
+) -> Result<crate::hooks::HookStatus, String> {
+    let scope = scope_from(&scope, project)?;
+    let status = crate::hooks::disconnect(&scope)?;
+    tracing::info!(path = %status.path, "Disconnected Claude Code");
+    Ok(status)
 }

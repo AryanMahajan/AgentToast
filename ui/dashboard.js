@@ -157,6 +157,132 @@ function renderRequest(request) {
     return box;
 }
 
+/* ---------------------------------------------------------------- setup --- */
+
+// The project the user last chose to connect. Kept only for this window; the
+// settings file itself is the real record of what is connected.
+let chosenProject = null;
+
+function setupRow(status, scope, label) {
+    const row = document.createElement('div');
+    row.className = 'setup-row';
+    // Connected and pointing at this build is green; connected to a bridge that
+    // no longer exists is a warning, because it silently does nothing.
+    row.style.setProperty('--tone', `var(--${status.stale ? 'warn' : status.connected ? 'ok' : 'fg3'})`);
+
+    const dot = document.createElement('div');
+    dot.className = 'setup-dot';
+
+    const labels = document.createElement('div');
+    labels.className = 'setup-labels';
+
+    const name = document.createElement('div');
+    name.className = 'setup-scope';
+    name.textContent = label;
+
+    const detail = document.createElement('div');
+    detail.className = 'setup-path' + (status.stale ? ' setup-warn' : '');
+    detail.textContent = status.stale
+        ? `points at a different build: ${status.bridge}`
+        : status.connected
+            ? status.path
+            : `not connected — ${status.path}`;
+    detail.title = detail.textContent;
+
+    labels.append(name, detail);
+
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = `btn ${status.connected && !status.stale ? 'btn-outline' : 'btn-primary'}`;
+    action.textContent = status.stale ? 'Repair' : status.connected ? 'Disconnect' : 'Connect';
+    action.addEventListener('click', async () => {
+        action.disabled = true;
+        const command = status.connected && !status.stale ? 'disconnect_hooks' : 'connect_hooks';
+        try {
+            await invoke(command, { scope, project: chosenProject });
+        } catch (e) {
+            console.error('Setup failed:', e);
+            note(String(e), true);
+        }
+        refreshSetup();
+    });
+
+    row.append(dot, labels, action);
+    return row;
+}
+
+function note(text, isError) {
+    const el = document.getElementById('setup-note');
+    el.textContent = text;
+    el.classList.toggle('setup-warn', !!isError);
+}
+
+async function refreshSetup() {
+    let statuses = [];
+    try {
+        statuses = await invoke('hook_status', { project: chosenProject });
+    } catch (e) {
+        console.error('Failed to read hook status:', e);
+        note('Could not read Claude Code settings', true);
+        return;
+    }
+
+    const rows = document.getElementById('setup-rows');
+    rows.innerHTML = '';
+    rows.appendChild(setupRow(statuses[0], 'global', 'Every project'));
+
+    if (statuses[1]) {
+        rows.appendChild(setupRow(statuses[1], 'project', folderName(chosenProject)));
+    }
+
+    // Choosing a folder is how the second row appears at all.
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'btn btn-ghost';
+    pick.textContent = chosenProject ? 'Choose a different project…' : 'Just one project…';
+    pick.addEventListener('click', pickProject);
+
+    const picker = document.createElement('div');
+    picker.className = 'setup-row';
+    picker.appendChild(pick);
+    rows.appendChild(picker);
+
+    const connected = statuses.some((s) => s.connected && !s.stale);
+    note(connected ? '' : 'Not connected — Claude Code will not send anything yet');
+}
+
+function folderName(path) {
+    if (!path) return 'This project';
+    const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+    return parts[parts.length - 1] || path;
+}
+
+// Resolved at call time, not at load: the dialog plugin is not always exposed
+// on the global, and reaching for it up front took the whole dashboard down.
+async function chooseFolder() {
+    const options = { directory: true, title: 'Choose a project folder' };
+
+    const dialog = window.__TAURI__ && window.__TAURI__.dialog;
+    if (dialog && typeof dialog.open === 'function') {
+        return dialog.open(options);
+    }
+    // The plugin command works even when its JS wrapper is absent.
+    return invoke('plugin:dialog|open', { options });
+}
+
+async function pickProject() {
+    try {
+        const picked = await chooseFolder();
+        if (picked) {
+            chosenProject = typeof picked === 'string' ? picked : String(picked);
+            refreshSetup();
+        }
+    } catch (e) {
+        console.error('Folder picker failed:', e);
+        note('Could not open the folder picker', true);
+    }
+}
+
 async function refresh() {
     let sessions = [];
     try {
@@ -193,4 +319,8 @@ async function refresh() {
 }
 
 refresh();
+refreshSetup().catch((e) => {
+    console.error('Setup panel failed:', e);
+    note('Setup unavailable: ' + e, true);
+});
 setInterval(refresh, POLL_MS);

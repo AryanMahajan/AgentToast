@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the toast and dashboard windows.",
+  "windows": ["main", "dashboard", "toast-*", "prewarm"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open"
+  ]
+}

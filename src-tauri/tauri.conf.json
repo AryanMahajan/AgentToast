@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.agenttoast.app",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui",
+    "beforeBuildCommand": "cargo build --release -p agenttoast-bridge-claude"
   },
   "app": {
     "withGlobalTauri": true,
@@ -15,7 +16,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

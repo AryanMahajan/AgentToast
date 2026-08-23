@@ -20,3 +20,7 @@ node_modules/
 
 # Tauri generated schemas
 src-tauri/gen/schemas/
+
+# Local working notes (not part of the public repo)
+CHANGELOG.md
+TODO.md

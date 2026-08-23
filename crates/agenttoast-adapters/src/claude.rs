@@ -450,7 +450,7 @@ mod permission_request_tests {
             "hook_event_name": "PermissionRequest",
             "tool_name": "Bash",
             "tool_input": {
-                "command": "rm \"C:/Users/DELL/Desktop/toast-test/hello.txt\" && echo \"deleted\"",
+                "command": "rm \"C:/Users/you/project/hello.txt\" && echo \"deleted\"",
                 "description": "Remove hello.txt"
             }
         });

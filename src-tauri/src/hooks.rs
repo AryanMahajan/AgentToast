@@ -511,13 +511,13 @@ mod tests {
 
     /// Claude Code runs hooks through bash, which eats backslashes, and the OS
     /// hands back paths carrying a `\\?\` prefix. Written verbatim, the command
-    /// arrives as `?C:UsersDELL...` and is not found.
+    /// arrives as `?C:Usersyou...` and is not found.
     #[test]
     fn command_strips_verbatim_prefix_and_uses_forward_slashes() {
-        let path = Path::new(r"\\?\C:\Users\DELL\tools\agenttoast-bridge-claude.exe");
+        let path = Path::new(r"\\?\C:\Users\you\tools\agenttoast-bridge-claude.exe");
         assert_eq!(
             command_string(path),
-            "C:/Users/DELL/tools/agenttoast-bridge-claude.exe"
+            "C:/Users/you/tools/agenttoast-bridge-claude.exe"
         );
     }
 

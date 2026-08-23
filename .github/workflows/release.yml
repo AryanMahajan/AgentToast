@@ -1,0 +1,66 @@
+# Builds the Windows installer and attaches it to a GitHub Release.
+#
+# Triggered by pushing a tag like v0.1.0. The version in the tag should match
+# the one in Cargo.toml — nothing enforces that, so check before tagging.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Lets you build an installer without tagging, to check the workflow itself.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # The extra config adds the bridge binary to the bundle. It is kept out of
+      # the main config because Tauri checks resource paths at compile time,
+      # which would break a plain `cargo build`.
+      - name: Build the installer
+        run: cargo tauri build --config src-tauri/tauri.bundle.conf.json
+
+      - name: Upload the installer as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentToast-installer
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+      - name: Attach the installer to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: target/release/bundle/nsis/*-setup.exe
+          body: |
+            Download the `.exe` below and run it.
+
+            Windows will warn that the publisher is unknown — the installer is
+            not code-signed. Choose **More info → Run anyway**.
+
+            After installing, open the dashboard from the tray icon and press
+            **Connect** under *Claude Code*, then restart any running Claude
+            Code session.

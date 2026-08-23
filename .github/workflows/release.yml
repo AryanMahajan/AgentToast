@@ -15,7 +15,20 @@ permissions:
   contents: write
 
 jobs:
-  windows:
+  # Runs alongside the build rather than before it. Tests need a debug build of
+  # the whole tree and the installer needs a release one, so making the build
+  # wait for the tests would mean compiling everything twice, in series.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+      - run: cargo test --workspace
+
+  installer:
     runs-on: windows-latest
 
     steps:
@@ -27,13 +40,16 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: . -> target
+          key: installer
 
-      - name: Test
-        run: cargo test --workspace
+      # Fetches a prebuilt tauri-cli. `cargo install` would compile it from
+      # source, which costs well over ten minutes on a Windows runner every
+      # time the cache misses.
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
 
       - name: Install the Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo binstall tauri-cli --version "^2" --no-confirm --locked
 
       # The extra config adds the bridge binary to the bundle. It is kept out of
       # the main config because Tauri checks resource paths at compile time,

@@ -90,6 +90,13 @@ function renderToast(event) {
     el('status').textContent = look.status;
     el('task').textContent = event.message;
 
+    // Shown so that, when several terminals are raised at once, the user knows
+    // which project they are looking for.
+    const cwd = event.cwd || '';
+    el('cwd').textContent = cwd;
+    el('cwd').title = cwd;
+    el('cwd').hidden = !cwd;
+
     const log = logLine(event);
     el('log').textContent = log;
     el('log').hidden = !log;

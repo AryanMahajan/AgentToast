@@ -71,14 +71,14 @@ pub async fn respond_to_event(
     // handing the decision back. Do this first: resolving the event unblocks
     // the bridge, which clears the session's pending request.
     if action_type == ActionType::OpenSession {
-        match session_pid_for_event(&state, event_uuid).await {
-            Some(pid) => {
-                crate::focus::focus_agent_window(pid);
+        match pending_event(&state, event_uuid).await {
+            Some(event) => {
+                crate::focus::focus_agent_window(event.process_id.unwrap_or_default());
             }
             None => {
                 tracing::warn!(
                     event_id = %event_id,
-                    "No pid recorded for this session; cannot raise its terminal"
+                    "Request is no longer pending; nothing to raise"
                 );
             }
         }
@@ -154,17 +154,13 @@ pub async fn reopen_toast(
     Ok(())
 }
 
-/// PID of the agent process that owns the session behind `event_id`.
-async fn session_pid_for_event(state: &Arc<AppState>, event_id: Uuid) -> Option<u32> {
+/// The still-pending attention event with this id, if any.
+async fn pending_event(state: &Arc<AppState>, event_id: Uuid) -> Option<AttentionEvent> {
     state
         .sessions
         .all()
         .await
         .into_iter()
-        .find(|s| {
-            s.attention_request
-                .as_ref()
-                .is_some_and(|e| e.event_id == event_id)
-        })
-        .and_then(|s| s.process_id)
+        .filter_map(|s| s.attention_request)
+        .find(|e| e.event_id == event_id)
 }

@@ -1,7 +1,0 @@
-Placeholder: Replace these icons with proper AgentToast branding.
-
-Required icon files:
-- icon.png (tray icon, 32x32 or 64x64)
-- 32x32.png
-- 128x128.png  
-- icon.ico (Windows icon)

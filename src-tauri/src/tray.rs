@@ -12,7 +12,16 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
-    let _tray = TrayIconBuilder::new()
+    // Without this the tray entry is created with no image at all: it still
+    // occupies a slot and still responds to clicks, but renders as blank space,
+    // which is impossible to find deliberately.
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or("no application icon is embedded to use in the tray")?;
+
+    let _tray = TrayIconBuilder::with_id("agenttoast")
+        .icon(icon)
         .menu(&menu)
         .tooltip("AgentToast — Monitoring agent sessions")
         // Left-clicking the tray icon opens the dashboard. Hiding a toast

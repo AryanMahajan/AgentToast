@@ -159,11 +159,11 @@ function renderRequest(request) {
 
 /* ---------------------------------------------------------------- setup --- */
 
-// The project the user last chose to connect. Kept only for this window; the
-// settings file itself is the real record of what is connected.
-let chosenProject = null;
+let setupTimer = null;
 
-function setupRow(status, scope, label) {
+function setupRow(status) {
+    const scope = status.project ? 'project' : 'global';
+    const label = status.project ? folderName(status.project) : 'Every project';
     const row = document.createElement('div');
     row.className = 'setup-row';
     // Connected and pointing at this build is green; connected to a bridge that
@@ -199,7 +199,7 @@ function setupRow(status, scope, label) {
         action.disabled = true;
         const command = status.connected && !status.stale ? 'disconnect_hooks' : 'connect_hooks';
         try {
-            await invoke(command, { scope, project: chosenProject });
+            await invoke(command, { scope, project: status.project });
         } catch (e) {
             console.error('Setup failed:', e);
             note(String(e), true);
@@ -208,6 +208,24 @@ function setupRow(status, scope, label) {
     });
 
     row.append(dot, labels, action);
+
+    if (status.project) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn btn-ghost setup-remove';
+        remove.textContent = '×';
+        remove.title = 'Remove this project from the list (its hooks are left alone)';
+        remove.addEventListener('click', async () => {
+            try {
+                await invoke('remove_project', { project: status.project });
+            } catch (e) {
+                console.error('Could not remove project:', e);
+            }
+            refreshSetup();
+        });
+        row.appendChild(remove);
+    }
+
     return row;
 }
 
@@ -220,7 +238,7 @@ function note(text, isError) {
 async function refreshSetup() {
     let statuses = [];
     try {
-        statuses = await invoke('hook_status', { project: chosenProject });
+        statuses = await invoke('hook_status', { project: null });
     } catch (e) {
         console.error('Failed to read hook status:', e);
         note('Could not read Claude Code settings', true);
@@ -229,17 +247,14 @@ async function refreshSetup() {
 
     const rows = document.getElementById('setup-rows');
     rows.innerHTML = '';
-    rows.appendChild(setupRow(statuses[0], 'global', 'Every project'));
-
-    if (statuses[1]) {
-        rows.appendChild(setupRow(statuses[1], 'project', folderName(chosenProject)));
+    for (const status of statuses) {
+        rows.appendChild(setupRow(status));
     }
 
-    // Choosing a folder is how the second row appears at all.
     const pick = document.createElement('button');
     pick.type = 'button';
     pick.className = 'btn btn-ghost';
-    pick.textContent = chosenProject ? 'Choose a different project…' : 'Just one project…';
+    pick.textContent = 'Add a project…';
     pick.addEventListener('click', pickProject);
 
     const picker = document.createElement('div');
@@ -249,6 +264,9 @@ async function refreshSetup() {
 
     const connected = statuses.some((s) => s.connected && !s.stale);
     note(connected ? '' : 'Not connected — Claude Code will not send anything yet');
+
+    // Keep the panel honest while the window stays open.
+    if (!setupTimer) setupTimer = setInterval(() => refreshSetup().catch(() => {}), 4000);
 }
 
 function folderName(path) {
@@ -274,7 +292,10 @@ async function pickProject() {
     try {
         const picked = await chooseFolder();
         if (picked) {
-            chosenProject = typeof picked === 'string' ? picked : String(picked);
+            const dir = typeof picked === 'string' ? picked : String(picked);
+            // Recorded by the daemon, so the row is still here next time the
+            // dashboard is opened — whether or not it gets connected now.
+            await invoke('add_project', { project: dir });
             refreshSetup();
         }
     } catch (e) {

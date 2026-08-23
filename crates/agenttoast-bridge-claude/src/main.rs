@@ -53,14 +53,15 @@ async fn run() -> Result<()> {
 
     // Session lifecycle hooks only maintain the registry; they have no decision
     // to wait for, so they report and exit rather than blocking the agent.
-    match HookKind::from_payload(&payload) {
+    let kind = HookKind::from_payload(&payload);
+    match kind {
         HookKind::SessionStart => {
             return register_session(&config, &auth_token, &payload).await;
         }
         HookKind::SessionEnd => {
             return deregister_session(&config, &auth_token, &payload).await;
         }
-        HookKind::Attention => {}
+        HookKind::PermissionRequest | HookKind::PreToolUse => {}
     }
 
     let event = adapter
@@ -72,6 +73,7 @@ async fn run() -> Result<()> {
 
     info!(
         session_id = %event.session_id,
+        hook = ?kind,
         tool = ?event.tool_name,
         pid = ?event.process_id,
         message = %event.message,
@@ -107,9 +109,18 @@ async fn run() -> Result<()> {
             text_input,
             ..
         } => {
-            let hook_response = adapter.format_response(action, text_input.as_deref())?;
-            info!(response = %hook_response, "Sending response to Claude Code");
-            print!("{}", hook_response);
+            // The two events take different answer formats, and for a
+            // PermissionRequest "let the user decide in the terminal" is
+            // expressed by writing nothing at all.
+            match adapter.format_for(kind, action, text_input.as_deref())? {
+                Some(hook_response) => {
+                    info!(response = %hook_response, "Sending response to Claude Code");
+                    print!("{}", hook_response);
+                }
+                None => {
+                    info!("Handing the decision back to the session");
+                }
+            }
         }
         IpcResponse::Error { message } => {
             error!(error = %message, "Daemon returned error");

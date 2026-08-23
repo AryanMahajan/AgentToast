@@ -30,8 +30,15 @@ pub struct ClaudeHookPayload {
 /// What a hook payload is asking AgentToast to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookKind {
-    /// A tool wants permission — raise a toast and block on the answer.
-    Attention,
+    /// Claude Code is asking the user for permission. This is the event
+    /// AgentToast exists for: it fires only once Claude has decided it needs a
+    /// human, so it already respects whatever permission mode is in force.
+    PermissionRequest,
+    /// A tool is about to run. Fires for *every* matching call, whether or not
+    /// Claude Code would have asked — so in `auto` or `acceptEdits` it
+    /// overrides a choice the user deliberately made. Supported for anyone who
+    /// wants a toast on everything, but not what gets configured by default.
+    PreToolUse,
     /// A session started — record it in the registry.
     SessionStart,
     /// A session ended — drop it from the registry.
@@ -41,15 +48,20 @@ pub enum HookKind {
 impl HookKind {
     /// Classify a payload by its `hook_event_name`.
     ///
-    /// Anything unrecognised is treated as an attention request: that is the
-    /// behaviour the hook config has always had, and erring toward showing a
-    /// toast is better than silently swallowing an event.
+    /// Anything unrecognised is treated as a permission request: erring toward
+    /// showing a toast beats silently swallowing an event.
     pub fn from_payload(payload: &Value) -> Self {
         match payload.get("hook_event_name").and_then(|v| v.as_str()) {
             Some("SessionStart") => HookKind::SessionStart,
             Some("SessionEnd") => HookKind::SessionEnd,
-            _ => HookKind::Attention,
+            Some("PreToolUse") => HookKind::PreToolUse,
+            _ => HookKind::PermissionRequest,
         }
+    }
+
+    /// Whether this event should raise a toast and wait for an answer.
+    pub fn needs_attention(self) -> bool {
+        matches!(self, HookKind::PermissionRequest | HookKind::PreToolUse)
     }
 }
 
@@ -82,6 +94,45 @@ impl ClaudeHookResponse {
                 hook_event_name: "PreToolUse",
                 permission_decision: decision,
                 permission_decision_reason: reason,
+            },
+        }
+    }
+}
+
+/// A `PermissionRequest` hook result.
+///
+/// A different shape from `PreToolUse`: the decision is an object with a
+/// `behavior` of `allow` or `deny`, and there is no `ask` — declining to decide
+/// is expressed by writing nothing at all, which lets Claude Code fall through
+/// to its own prompt.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequestResponse {
+    pub hook_specific_output: PermissionRequestOutput,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequestOutput {
+    pub hook_event_name: &'static str,
+    pub decision: PermissionDecision,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionDecision {
+    /// `allow` or `deny`.
+    pub behavior: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl PermissionRequestResponse {
+    fn new(behavior: &'static str, message: Option<String>) -> Self {
+        Self {
+            hook_specific_output: PermissionRequestOutput {
+                hook_event_name: "PermissionRequest",
+                decision: PermissionDecision { behavior, message },
             },
         }
     }
@@ -157,6 +208,24 @@ impl AgentAdapter for ClaudeAdapter {
 }
 
 fn build_message(tool_name: &str, tool_input: &Option<Value>) -> String {
+    // Claude writes its own one-line summary of what it is about to do —
+    // "Remove hello.txt" rather than the full shell line. It is better than
+    // anything reconstructed from the raw input, so prefer it when present.
+    // The raw command still reaches the toast through the context field.
+    if let Some(description) = tool_input
+        .as_ref()
+        .and_then(|input| input.get("description"))
+        .and_then(|d| d.as_str())
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        return description.to_string();
+    }
+
+    build_message_from_input(tool_name, tool_input)
+}
+
+fn build_message_from_input(tool_name: &str, tool_input: &Option<Value>) -> String {
     match tool_name {
         "Bash" => {
             if let Some(input) = tool_input {
@@ -269,5 +338,138 @@ mod tests {
         assert_eq!(event.tool_name.as_deref(), Some("Bash"));
         assert_eq!(event.message, "Claude wants to run: npm run migrate");
         assert_eq!(event.state, agenttoast_core::SessionState::WaitingForPermission);
+    }
+}
+
+impl ClaudeAdapter {
+    /// Format a user's answer for whichever hook asked the question.
+    ///
+    /// `None` means write nothing: for a `PermissionRequest` there is no way to
+    /// say "ask the user instead", so staying silent is how the decision is
+    /// handed back to Claude Code's own prompt.
+    pub fn format_for(
+        &self,
+        kind: HookKind,
+        action: ActionType,
+        text: Option<&str>,
+    ) -> Result<Option<String>> {
+        match kind {
+            HookKind::PreToolUse => self.format_response(action, text).map(Some),
+            HookKind::PermissionRequest => self.format_permission_request(action),
+            // Lifecycle events carry no decision.
+            HookKind::SessionStart | HookKind::SessionEnd => Ok(None),
+        }
+    }
+
+    fn format_permission_request(&self, action: ActionType) -> Result<Option<String>> {
+        let response = match action {
+            ActionType::Approve | ActionType::Confirm => {
+                PermissionRequestResponse::new("allow", None)
+            }
+            ActionType::Deny | ActionType::Reject => PermissionRequestResponse::new(
+                "deny",
+                Some("Denied by user via AgentToast".to_string()),
+            ),
+            // The user wants to decide in the terminal. Saying nothing lets
+            // Claude Code ask them there, which is exactly what they asked for.
+            ActionType::OpenSession | ActionType::SendText => return Ok(None),
+        };
+
+        serde_json::to_string(&response)
+            .map(Some)
+            .context("Failed to serialize Claude permission response")
+    }
+}
+
+#[cfg(test)]
+mod permission_request_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn decision(action: ActionType) -> Option<Value> {
+        ClaudeAdapter
+            .format_for(HookKind::PermissionRequest, action, None)
+            .unwrap()
+            .map(|raw| serde_json::from_str(&raw).unwrap())
+    }
+
+    #[test]
+    fn permission_request_is_classified_by_event_name() {
+        let payload = json!({ "hook_event_name": "PermissionRequest" });
+        assert_eq!(HookKind::from_payload(&payload), HookKind::PermissionRequest);
+
+        let payload = json!({ "hook_event_name": "PreToolUse" });
+        assert_eq!(HookKind::from_payload(&payload), HookKind::PreToolUse);
+    }
+
+    /// The shape differs from PreToolUse: a decision object with `behavior`,
+    /// not a `permissionDecision` string.
+    #[test]
+    fn approve_allows_via_behavior() {
+        let out = decision(ActionType::Approve).expect("approve must answer");
+        assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+        assert_eq!(out["hookSpecificOutput"]["decision"]["behavior"], "allow");
+        assert!(
+            out["hookSpecificOutput"].get("permissionDecision").is_none(),
+            "the PreToolUse field must not leak into this response"
+        );
+    }
+
+    #[test]
+    fn deny_blocks_with_a_reason() {
+        let out = decision(ActionType::Deny).expect("deny must answer");
+        assert_eq!(out["hookSpecificOutput"]["decision"]["behavior"], "deny");
+        assert!(out["hookSpecificOutput"]["decision"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("AgentToast"));
+    }
+
+    /// There is no "ask" for this event, so declining to decide means writing
+    /// nothing at all and letting Claude Code prompt in the terminal.
+    #[test]
+    fn open_session_answers_nothing() {
+        assert!(decision(ActionType::OpenSession).is_none());
+        assert!(decision(ActionType::SendText).is_none());
+    }
+
+    #[test]
+    fn lifecycle_events_never_answer() {
+        for kind in [HookKind::SessionStart, HookKind::SessionEnd] {
+            let out = ClaudeAdapter
+                .format_for(kind, ActionType::Approve, None)
+                .unwrap();
+            assert!(out.is_none(), "{:?} must not emit a decision", kind);
+        }
+    }
+
+    #[test]
+    fn claudes_own_description_becomes_the_headline() {
+        let payload = json!({
+            "session_id": "s1",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "rm \"C:/Users/DELL/Desktop/toast-test/hello.txt\" && echo \"deleted\"",
+                "description": "Remove hello.txt"
+            }
+        });
+
+        let event = ClaudeAdapter.parse_hook_payload(&payload).unwrap();
+        assert_eq!(event.message, "Remove hello.txt");
+        // The full command is still available for the toast's detail line.
+        assert!(event.context.unwrap().contains("rm "));
+    }
+
+    #[test]
+    fn falls_back_to_the_command_when_there_is_no_description() {
+        let payload = json!({
+            "session_id": "s1",
+            "tool_name": "Bash",
+            "tool_input": { "command": "npm run migrate" }
+        });
+
+        let event = ClaudeAdapter.parse_hook_payload(&payload).unwrap();
+        assert_eq!(event.message, "Claude wants to run: npm run migrate");
     }
 }

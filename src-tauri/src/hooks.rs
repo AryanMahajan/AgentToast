@@ -18,16 +18,24 @@ use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 /// Hook events AgentToast registers for.
-const PRE_TOOL_USE: &str = "PreToolUse";
+///
+/// `PermissionRequest` rather than `PreToolUse`, because it fires only once
+/// Claude Code has decided it needs a human. `PreToolUse` fires for every tool
+/// call regardless, which means it overrides the permission mode the user
+/// chose: in `auto` or `acceptEdits` they have explicitly said "stop asking",
+/// and a toast on every call ignores that.
+const PERMISSION_REQUEST: &str = "PermissionRequest";
 const SESSION_START: &str = "SessionStart";
 const SESSION_END: &str = "SessionEnd";
 
-/// Tools worth interrupting for.
-///
-/// Deliberately not `.*`: the hook fires for every matching tool whether or not
-/// Claude Code would have asked, so matching everything means a toast for each
-/// file read.
-const DEFAULT_MATCHER: &str = "Bash|Write|Edit|MultiEdit|NotebookEdit";
+/// Any tool the user is being asked about is worth a toast, so no matcher is
+/// set: by the time this event fires, Claude Code has already decided it needs
+/// an answer.
+const NO_MATCHER: Option<&str> = None;
+
+/// Left behind by earlier versions, which hooked PreToolUse. Recognised so
+/// connecting cleans it up rather than leaving both wired at once.
+const SUPERSEDED_EVENTS: [&str; 1] = ["PreToolUse"];
 
 /// Only start a session on a real start or resume, not on every clear/compact.
 const SESSION_START_MATCHER: &str = "startup|resume";
@@ -46,6 +54,14 @@ pub enum Scope {
 }
 
 impl Scope {
+    /// The project folder this scope refers to, or `None` when global.
+    pub fn project_path(&self) -> Option<String> {
+        match self {
+            Scope::Global => None,
+            Scope::Project(dir) => Some(dir.display().to_string()),
+        }
+    }
+
     /// The settings file this scope writes to.
     pub fn settings_path(&self) -> Option<PathBuf> {
         match self {
@@ -58,6 +74,9 @@ impl Scope {
 /// What the settings file currently says about AgentToast.
 #[derive(Debug, serde::Serialize)]
 pub struct HookStatus {
+    /// The project this row is for, or `None` for the global scope. Lets the
+    /// dashboard act on a row without having to remember what it asked for.
+    pub project: Option<String>,
     /// The settings file this describes.
     pub path: String,
     /// Whether the file exists at all.
@@ -75,6 +94,7 @@ pub struct HookStatus {
 pub fn status(scope: &Scope, current_bridge: Option<&Path>) -> HookStatus {
     let Some(path) = scope.settings_path() else {
         return HookStatus {
+            project: scope.project_path(),
             path: "<unknown>".into(),
             exists: false,
             connected: false,
@@ -86,6 +106,7 @@ pub fn status(scope: &Scope, current_bridge: Option<&Path>) -> HookStatus {
     let display = path.display().to_string();
     let Some(settings) = read_settings(&path) else {
         return HookStatus {
+            project: scope.project_path(),
             path: display,
             exists: path.exists(),
             connected: false,
@@ -107,6 +128,7 @@ pub fn status(scope: &Scope, current_bridge: Option<&Path>) -> HookStatus {
     };
 
     HookStatus {
+        project: scope.project_path(),
         path: display,
         exists: true,
         connected: bridge.is_some(),
@@ -148,9 +170,7 @@ pub fn connect(scope: &Scope, bridge: &Path) -> Result<HookStatus, String> {
     }
     let hooks = hooks.as_object_mut().unwrap();
 
-    upsert(hooks, PRE_TOOL_USE, Some(DEFAULT_MATCHER), &command);
-    upsert(hooks, SESSION_START, Some(SESSION_START_MATCHER), &command);
-    upsert(hooks, SESSION_END, None, &command);
+    apply_hooks(hooks, &command);
 
     write_settings(&path, &settings)?;
     Ok(status(scope, Some(bridge)))
@@ -174,7 +194,10 @@ pub fn disconnect(scope: &Scope) -> Result<HookStatus, String> {
         .and_then(|o| o.get_mut("hooks"))
         .and_then(|h| h.as_object_mut())
     {
-        for event in [PRE_TOOL_USE, SESSION_START, SESSION_END] {
+        for event in [PERMISSION_REQUEST, SESSION_START, SESSION_END] {
+            remove_ours(hooks, event);
+        }
+        for event in SUPERSEDED_EVENTS {
             remove_ours(hooks, event);
         }
         let empty = hooks.is_empty();
@@ -219,8 +242,11 @@ fn write_settings(path: &Path, settings: &Value) -> Result<(), String> {
 fn find_bridge_command(settings: &Value) -> Option<String> {
     let hooks = settings.get("hooks")?.as_object()?;
 
-    for event in [PRE_TOOL_USE, SESSION_START, SESSION_END] {
-        for group in hooks.get(event).and_then(|g| g.as_array())? .iter() {
+    for event in [PERMISSION_REQUEST, SESSION_START, SESSION_END, "PreToolUse"] {
+        let Some(groups) = hooks.get(event).and_then(|g| g.as_array()) else {
+            continue;
+        };
+        for group in groups.iter() {
             let Some(entries) = group.get("hooks").and_then(|h| h.as_array()) else {
                 continue;
             };
@@ -234,6 +260,22 @@ fn find_bridge_command(settings: &Value) -> Option<String> {
         }
     }
     None
+}
+
+/// Put AgentToast's hooks into a settings object.
+///
+/// The whole of what "connected" means, kept in one place so callers — the real
+/// one and the tests — cannot drift apart on it.
+fn apply_hooks(hooks: &mut Map<String, Value>, command: &str) {
+    upsert(hooks, PERMISSION_REQUEST, NO_MATCHER, command);
+    upsert(hooks, SESSION_START, Some(SESSION_START_MATCHER), command);
+    upsert(hooks, SESSION_END, NO_MATCHER, command);
+
+    // An install predating the switch still has us on PreToolUse. Leaving it
+    // would toast twice and keep overriding the user's permission mode.
+    for event in SUPERSEDED_EVENTS {
+        remove_ours(hooks, event);
+    }
 }
 
 /// Add our hook to an event, or refresh the path if it is already there.
@@ -349,9 +391,8 @@ mod tests {
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .unwrap();
-        upsert(hooks, PRE_TOOL_USE, Some(DEFAULT_MATCHER), command);
-        upsert(hooks, SESSION_START, Some(SESSION_START_MATCHER), command);
-        upsert(hooks, SESSION_END, None, command);
+        // Exercise the real thing, so the tests cannot drift from it.
+        apply_hooks(hooks, command);
     }
 
     #[test]
@@ -370,14 +411,46 @@ mod tests {
             "hooks": {
                 "PreToolUse": [
                     { "matcher": "Bash", "hooks": [{ "type": "command", "command": "someone-elses-tool" }] }
+                ],
+                "PermissionRequest": [
+                    { "hooks": [{ "type": "command", "command": "someone-elses-auditor" }] }
                 ]
             }
         });
         connect_into(&mut settings, "C:/app/agenttoast-bridge-claude.exe");
 
-        let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(groups.len(), 2, "ours should be added beside theirs");
-        assert_eq!(groups[0]["hooks"][0]["command"], "someone-elses-tool");
+        let ours = settings["hooks"][PERMISSION_REQUEST].as_array().unwrap();
+        assert_eq!(ours.len(), 2, "ours should be added beside theirs");
+        assert_eq!(ours[0]["hooks"][0]["command"], "someone-elses-auditor");
+
+        // Their PreToolUse hook must survive the cleanup of *our* old entries.
+        let theirs = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(theirs.len(), 1);
+        assert_eq!(theirs[0]["hooks"][0]["command"], "someone-elses-tool");
+    }
+
+    /// Upgrading from a version that hooked PreToolUse must move us over, not
+    /// leave both wired — otherwise every call toasts twice and the permission
+    /// mode is still overridden.
+    #[test]
+    fn connecting_migrates_off_pretooluse() {
+        let mut settings = json!({
+            "hooks": {
+                "PreToolUse": [
+                    { "matcher": "Bash", "hooks": [{ "type": "command", "command": "C:/old/agenttoast-bridge-claude.exe" }] }
+                ]
+            }
+        });
+        connect_into(&mut settings, "C:/app/agenttoast-bridge-claude.exe");
+
+        assert!(
+            settings["hooks"].get("PreToolUse").is_none(),
+            "our old PreToolUse entry should be gone, and the empty event with it"
+        );
+        assert_eq!(
+            settings["hooks"][PERMISSION_REQUEST][0]["hooks"][0]["command"],
+            "C:/app/agenttoast-bridge-claude.exe"
+        );
     }
 
     /// Pressing Connect twice must not stack duplicates, and a moved install
@@ -388,7 +461,7 @@ mod tests {
         connect_into(&mut settings, "C:/old/agenttoast-bridge-claude.exe");
         connect_into(&mut settings, "D:/new/agenttoast-bridge-claude.exe");
 
-        let groups = settings["hooks"][PRE_TOOL_USE].as_array().unwrap();
+        let groups = settings["hooks"][PERMISSION_REQUEST].as_array().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(
             groups[0]["hooks"][0]["command"],
@@ -401,8 +474,8 @@ mod tests {
         let mut settings = json!({
             "model": "opus",
             "hooks": {
-                "PreToolUse": [
-                    { "matcher": "Bash", "hooks": [{ "type": "command", "command": "someone-elses-tool" }] }
+                "PermissionRequest": [
+                    { "hooks": [{ "type": "command", "command": "someone-elses-tool" }] }
                 ]
             }
         });
@@ -411,12 +484,15 @@ mod tests {
         let hooks = settings.as_object_mut().unwrap()["hooks"]
             .as_object_mut()
             .unwrap();
-        for event in [PRE_TOOL_USE, SESSION_START, SESSION_END] {
+        for event in [PERMISSION_REQUEST, SESSION_START, SESSION_END] {
+            remove_ours(hooks, event);
+        }
+        for event in SUPERSEDED_EVENTS {
             remove_ours(hooks, event);
         }
 
         assert_eq!(settings["model"], "opus");
-        let groups = settings["hooks"][PRE_TOOL_USE].as_array().unwrap();
+        let groups = settings["hooks"][PERMISSION_REQUEST].as_array().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0]["hooks"][0]["command"], "someone-elses-tool");
         assert!(settings["hooks"].get(SESSION_START).is_none());
@@ -482,5 +558,60 @@ mod tests {
             "C:/tools/agenttoast-bridge-claude.exe".eq_ignore_ascii_case(&written),
             "an already-correct command must not be flagged"
         );
+    }
+}
+
+/* --------------------------------------------------------- remembering --- */
+//
+// Which projects the dashboard should show a row for. Held on disk rather than
+// in the window, because a list that vanishes when the window closes is not a
+// list — and the dashboard is exactly the thing a user closes and reopens.
+//
+// Only the *paths* are stored. Whether each is actually connected is always
+// re-read from its settings file, so a project edited by hand outside
+// AgentToast still shows the truth.
+
+/// Where the remembered project list lives.
+fn projects_file() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".agenttoast").join("projects.json"))
+}
+
+/// Projects the user has connected, most recent last.
+pub fn remembered_projects() -> Vec<String> {
+    let Some(path) = projects_file() else {
+        return Vec::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn save_projects(projects: &[String]) {
+    let Some(path) = projects_file() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(body) = serde_json::to_string_pretty(projects) {
+        let _ = std::fs::write(&path, body + "\n");
+    }
+}
+
+/// Start showing a row for this project.
+pub fn remember_project(project: &str) {
+    let mut projects = remembered_projects();
+    if !projects.iter().any(|p| p.eq_ignore_ascii_case(project)) {
+        projects.push(project.to_string());
+        save_projects(&projects);
+    }
+}
+
+/// Stop showing a row for this project.
+pub fn forget_project(project: &str) {
+    let mut projects = remembered_projects();
+    let before = projects.len();
+    projects.retain(|p| !p.eq_ignore_ascii_case(project));
+    if projects.len() != before {
+        save_projects(&projects);
     }
 }

@@ -81,6 +81,8 @@ fn main() {
             commands::hide_toast,
             commands::bridge_path,
             commands::hook_status,
+            commands::add_project,
+            commands::remove_project,
             commands::connect_hooks,
             commands::disconnect_hooks,
             commands::close_window,

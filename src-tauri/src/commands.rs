@@ -187,6 +187,22 @@ fn scope_from(scope: &str, project: Option<String>) -> Result<crate::hooks::Scop
     }
 }
 
+/// Start showing a row for this project, whether or not it is connected yet.
+///
+/// Adding and connecting are separate acts: a project may already be wired up
+/// from an earlier session, in which case the user never presses Connect and
+/// nothing would ever record it.
+#[tauri::command]
+pub fn add_project(project: String) {
+    crate::hooks::remember_project(&project);
+}
+
+/// Stop showing a row for this project. Leaves its hooks alone.
+#[tauri::command]
+pub fn remove_project(project: String) {
+    crate::hooks::forget_project(&project);
+}
+
 /// Whether Claude Code is currently wired up, globally and for a project.
 #[tauri::command]
 pub fn hook_status(
@@ -197,7 +213,15 @@ pub fn hook_status(
     let bridge = bridge.as_deref();
 
     let mut out = vec![crate::hooks::status(&crate::hooks::Scope::Global, bridge)];
+
+    let mut projects = crate::hooks::remembered_projects();
     if let Some(dir) = project {
+        if !projects.iter().any(|p| p.eq_ignore_ascii_case(&dir)) {
+            projects.push(dir);
+        }
+    }
+
+    for dir in projects {
         out.push(crate::hooks::status(
             &crate::hooks::Scope::Project(std::path::PathBuf::from(dir)),
             bridge,
@@ -221,6 +245,12 @@ pub fn connect_hooks(
 
     let scope = scope_from(&scope, project)?;
     let status = crate::hooks::connect(&scope, &bridge)?;
+
+    // Keep a row for it after the dashboard is closed and reopened.
+    if let Some(dir) = &status.project {
+        crate::hooks::remember_project(dir);
+    }
+
     tracing::info!(path = %status.path, bridge = %bridge.display(), "Connected Claude Code");
     Ok(status)
 }
@@ -233,6 +263,7 @@ pub fn disconnect_hooks(
 ) -> Result<crate::hooks::HookStatus, String> {
     let scope = scope_from(&scope, project)?;
     let status = crate::hooks::disconnect(&scope)?;
+
     tracing::info!(path = %status.path, "Disconnected Claude Code");
     Ok(status)
 }

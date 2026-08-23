@@ -264,3 +264,15 @@ body.dashboard {
 .setup-warn {
     color: var(--warn);
 }
+
+.setup-remove {
+    flex: none;
+    padding: 6px 8px;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--fg3);
+}
+
+.setup-remove:hover {
+    color: var(--fg);
+}

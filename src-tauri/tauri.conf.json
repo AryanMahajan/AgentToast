@@ -4,7 +4,7 @@
   "identifier": "com.agenttoast.app",
   "build": {
     "frontendDist": "../ui",
-    "beforeBuildCommand": "cargo build --release -p agenttoast-bridge-claude"
+    "beforeBuildCommand": "cargo build --release -p agenttoast-bridge-claude -p agenttoast-bridge-agy"
   },
   "app": {
     "withGlobalTauri": true,

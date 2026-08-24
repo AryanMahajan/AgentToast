@@ -4,12 +4,13 @@ members = [
     "crates/agenttoast-ipc",
     "crates/agenttoast-adapters",
     "crates/agenttoast-bridge-claude",
+    "crates/agenttoast-bridge-agy",
     "src-tauri",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["AgentToast Contributors"]
 license = "MIT"

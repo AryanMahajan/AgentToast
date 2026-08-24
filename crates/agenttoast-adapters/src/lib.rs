@@ -3,6 +3,7 @@
 //! Agent-specific adapters that translate between each agent's hook
 //! payload format and AgentToast's generic event model.
 
+pub mod agy;
 pub mod claude;
 
 use agenttoast_core::event::{ActionType, AttentionEvent};

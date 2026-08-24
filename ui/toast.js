@@ -55,13 +55,23 @@ function agentInfo(agent) {
 
 // The context blob is pretty-printed JSON. The design's log strip is a single
 // ellipsised mono line, so pull out the one field that actually matters.
+//
+// The two agents name their tool arguments differently — Claude Code uses
+// snake_case, Antigravity PascalCase — so both spellings are looked for. The
+// first match wins, and without one the whole blob gets collapsed instead,
+// which is readable but says much less.
+const LOG_FIELDS = [
+    'command', 'file_path', 'path', 'pattern', 'url', 'description',
+    'CommandLine', 'TargetFile', 'AbsolutePath', 'DirectoryPath', 'Pattern', 'Query',
+];
+
 function logLine(event) {
     if (!event.context) return '';
     try {
         const parsed = JSON.parse(event.context);
-        const interesting = parsed.command ?? parsed.file_path ?? parsed.path ??
-            parsed.pattern ?? parsed.url ?? parsed.description;
-        if (typeof interesting === 'string' && interesting.trim()) {
+        const interesting = LOG_FIELDS.map((field) => parsed[field])
+            .find((value) => typeof value === 'string' && value.trim());
+        if (interesting) {
             return interesting.replace(/\s+/g, ' ').trim();
         }
     } catch (_) {
@@ -144,16 +154,24 @@ function renderFooter(event) {
         return;
     }
 
+    // "Open session" is normally the quiet tertiary next to Approve. When there
+    // is nothing to approve — an Antigravity toast, where a hook cannot grant
+    // permission — it is the only way forward, so it takes the primary styling
+    // rather than leaving the card with no obvious action.
+    const canAffirm = actions.some((a) => a.type === 'approve' || a.type === 'confirm');
+
     for (const action of actions) {
-        // "Open session" is the quiet tertiary at the far right of the row.
         if (action.type === 'open_session') {
             const spacer = document.createElement('span');
             spacer.className = 'grow';
             footer.appendChild(spacer);
         }
+        const style = action.type === 'open_session' && !canAffirm
+            ? 'btn-primary'
+            : BUTTON_CLASS[action.type] || 'btn-outline';
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = `btn ${BUTTON_CLASS[action.type] || 'btn-outline'}`;
+        btn.className = `btn ${style}`;
         btn.textContent = action.label;
         btn.addEventListener('click', () => respond(action.type, null));
         footer.appendChild(btn);

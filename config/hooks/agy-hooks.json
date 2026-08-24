@@ -1,0 +1,23 @@
+{
+  "agenttoast": {
+    "PreToolUse": [
+      {
+        "matcher": "^(run_command|write_to_file|create_file|replace_file_content|edit_notebook|delete_file)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agenttoast-bridge-agy",
+            "timeout": 660
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "agenttoast-bridge-agy",
+        "timeout": 660
+      }
+    ]
+  }
+}

@@ -161,9 +161,11 @@ function renderRequest(request) {
 
 let setupTimer = null;
 
-function setupRow(status) {
+// One row of a setup panel. The two agents differ only in which commands the
+// button calls and what the row is called, so the rendering is shared.
+function setupRow(status, agent) {
     const scope = status.project ? 'project' : 'global';
-    const label = status.project ? folderName(status.project) : 'Every project';
+    const label = status.project ? folderName(status.project) : agent.globalLabel;
     const row = document.createElement('div');
     row.className = 'setup-row';
     // Connected and pointing at this build is green; connected to a bridge that
@@ -197,14 +199,15 @@ function setupRow(status) {
     action.textContent = status.stale ? 'Repair' : status.connected ? 'Disconnect' : 'Connect';
     action.addEventListener('click', async () => {
         action.disabled = true;
-        const command = status.connected && !status.stale ? 'disconnect_hooks' : 'connect_hooks';
+        const connected = status.connected && !status.stale;
+        const command = connected ? agent.disconnect : agent.connect;
         try {
-            await invoke(command, { scope, project: status.project });
+            await invoke(command, agent.args(scope, status.project));
         } catch (e) {
             console.error('Setup failed:', e);
-            note(String(e), true);
+            agent.note(String(e), true);
         }
-        refreshSetup();
+        agent.refresh();
     });
 
     row.append(dot, labels, action);
@@ -221,7 +224,7 @@ function setupRow(status) {
             } catch (e) {
                 console.error('Could not remove project:', e);
             }
-            refreshSetup();
+            agent.refresh();
         });
         row.appendChild(remove);
     }
@@ -229,11 +232,35 @@ function setupRow(status) {
     return row;
 }
 
-function note(text, isError) {
-    const el = document.getElementById('setup-note');
+function noteInto(id, text, isError) {
+    const el = document.getElementById(id);
     el.textContent = text;
     el.classList.toggle('setup-warn', !!isError);
 }
+
+const note = (text, isError) => noteInto('setup-note', text, isError);
+const agyNote = (text, isError) => noteInto('agy-note', text, isError);
+
+// Everything that differs between the two setup panels.
+const CLAUDE_PANEL = {
+    globalLabel: 'Every project',
+    connect: 'connect_hooks',
+    disconnect: 'disconnect_hooks',
+    args: (scope, project) => ({ scope, project }),
+    note,
+    refresh: () => refreshSetup(),
+};
+
+const AGY_PANEL = {
+    globalLabel: 'This machine',
+    connect: 'connect_agy_hooks',
+    disconnect: 'disconnect_agy_hooks',
+    // Antigravity keeps one hooks file for the whole machine, so there is no
+    // scope to choose and nothing per-project to pass.
+    args: () => ({}),
+    note: agyNote,
+    refresh: () => refreshAgySetup(),
+};
 
 async function refreshSetup() {
     let statuses = [];
@@ -248,7 +275,7 @@ async function refreshSetup() {
     const rows = document.getElementById('setup-rows');
     rows.innerHTML = '';
     for (const status of statuses) {
-        rows.appendChild(setupRow(status));
+        rows.appendChild(setupRow(status, CLAUDE_PANEL));
     }
 
     const pick = document.createElement('button');
@@ -266,7 +293,35 @@ async function refreshSetup() {
     note(connected ? '' : 'Not connected — Claude Code will not send anything yet');
 
     // Keep the panel honest while the window stays open.
-    if (!setupTimer) setupTimer = setInterval(() => refreshSetup().catch(() => {}), 4000);
+    if (!setupTimer) {
+        setupTimer = setInterval(() => {
+            refreshSetup().catch(() => {});
+            refreshAgySetup().catch(() => {});
+        }, 4000);
+    }
+}
+
+async function refreshAgySetup() {
+    let status;
+    try {
+        status = await invoke('agy_hook_status');
+    } catch (e) {
+        console.error('Failed to read Antigravity hook status:', e);
+        agyNote('Could not read Antigravity hooks', true);
+        return;
+    }
+
+    const rows = document.getElementById('agy-rows');
+    rows.innerHTML = '';
+    rows.appendChild(setupRow(status, AGY_PANEL));
+
+    // Antigravity reads hooks once, when a session starts. A session that was
+    // already open when Connect ran has loaded none of ours and will keep
+    // prompting in the terminal — with nothing anywhere to say why. Saying so
+    // here is the only warning there is.
+    agyNote(status.connected && !status.stale
+        ? 'Connected — restart any agy session that is already open'
+        : 'Not connected — Antigravity will not send anything yet');
 }
 
 function folderName(path) {
@@ -343,5 +398,9 @@ refresh();
 refreshSetup().catch((e) => {
     console.error('Setup panel failed:', e);
     note('Setup unavailable: ' + e, true);
+});
+refreshAgySetup().catch((e) => {
+    console.error('Antigravity panel failed:', e);
+    agyNote('Setup unavailable: ' + e, true);
 });
 setInterval(refresh, POLL_MS);

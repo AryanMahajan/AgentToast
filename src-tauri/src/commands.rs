@@ -268,3 +268,46 @@ pub fn disconnect_hooks(
     tracing::info!(path = %status.path, "Disconnected Claude Code");
     Ok(status)
 }
+
+/* -------------------------------------------------------- Antigravity setup --- */
+
+/// Where the Antigravity bridge lives, if the app can find it.
+#[tauri::command]
+pub fn agy_bridge_path(app: tauri::AppHandle) -> Option<String> {
+    crate::install::agy_bridge_path(&app).map(|p| p.display().to_string())
+}
+
+/// Whether Antigravity is currently wired up.
+///
+/// One row rather than a list: Antigravity's other hooks location is a
+/// workspace's `.agents/hooks.json`, which is meant to be shared through
+/// version control, so AgentToast only ever writes the global one.
+#[tauri::command]
+pub fn agy_hook_status(app: tauri::AppHandle) -> crate::hooks::HookStatus {
+    let bridge = crate::install::agy_bridge_path(&app);
+    crate::agy_hooks::status(bridge.as_deref())
+}
+
+/// Add AgentToast's hooks to Antigravity's `hooks.json`.
+#[tauri::command]
+pub fn connect_agy_hooks(app: tauri::AppHandle) -> Result<crate::hooks::HookStatus, String> {
+    let bridge = crate::install::agy_bridge_path(&app).ok_or_else(|| {
+        "Could not find the AgentToast bridge for Antigravity. If this is a \
+         development build, run `cargo build --workspace` first."
+            .to_string()
+    })?;
+
+    let status = crate::agy_hooks::connect(&bridge)?;
+
+    tracing::info!(path = %status.path, bridge = %bridge.display(), "Connected Antigravity");
+    Ok(status)
+}
+
+/// Remove AgentToast's hooks, leaving every other named hook untouched.
+#[tauri::command]
+pub fn disconnect_agy_hooks() -> Result<crate::hooks::HookStatus, String> {
+    let status = crate::agy_hooks::disconnect()?;
+
+    tracing::info!(path = %status.path, "Disconnected Antigravity");
+    Ok(status)
+}

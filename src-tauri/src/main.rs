@@ -6,6 +6,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agy_hooks;
 mod commands;
 mod daemon;
 mod focus;
@@ -86,6 +87,10 @@ fn main() {
             commands::connect_hooks,
             commands::disconnect_hooks,
             commands::close_window,
+            commands::agy_bridge_path,
+            commands::agy_hook_status,
+            commands::connect_agy_hooks,
+            commands::disconnect_agy_hooks,
         ])
         .setup(|app| {
             // Set up system tray

@@ -38,12 +38,7 @@ pub async fn start(app_handle: AppHandle) {
                     process_id,
                     working_directory,
                 } => {
-                    let agent_type = match agent.as_str() {
-                        "claude" => AgentType::ClaudeCode,
-                        "agy" => AgentType::Antigravity,
-                        other => AgentType::Custom(other.to_string()),
-                    };
-                    let mut session = Session::new(&session_id, agent_type);
+                    let mut session = Session::new(&session_id, agent_type(&agent));
                     session.process_id = process_id;
                     session.working_directory = working_directory;
                     state.sessions.register(session).await;
@@ -82,6 +77,18 @@ pub async fn start(app_handle: AppHandle) {
     }
 }
 
+/// The agent an event or registration came from.
+///
+/// Every bridge reports its own id, so a session ends up labelled by whichever
+/// agent actually created it rather than by whichever one was assumed.
+fn agent_type(agent: &str) -> AgentType {
+    match agent {
+        "claude" => AgentType::ClaudeCode,
+        "agy" => AgentType::Antigravity,
+        other => AgentType::Custom(other.to_string()),
+    }
+}
+
 /// Handle an attention event: show the toast and wait for user response.
 async fn handle_attention(
     app: &AppHandle,
@@ -105,12 +112,7 @@ async fn handle_attention(
     // Auto-register the session if the SessionStart hook is not configured, or
     // if the daemon was started midway through a session.
     if state.sessions.get(&session_id).await.is_none() {
-        let agent_type = match event.agent.as_str() {
-            "claude" => AgentType::ClaudeCode,
-            "agy" => AgentType::Antigravity,
-            other => AgentType::Custom(other.to_string()),
-        };
-        let mut session = Session::new(&session_id, agent_type);
+        let mut session = Session::new(&session_id, agent_type(&event.agent));
         session.working_directory = event.cwd.clone();
         session.process_id = event.process_id;
         state.sessions.register(session).await;
@@ -197,7 +199,7 @@ async fn show_notification(app: &AppHandle, state: &Arc<AppState>, event: Attent
     );
 
     if state.sessions.get(&session_id).await.is_none() {
-        let mut session = Session::new(&session_id, AgentType::ClaudeCode);
+        let mut session = Session::new(&session_id, agent_type(&event.agent));
         session.working_directory = event.cwd.clone();
         session.process_id = event.process_id;
         state.sessions.register(session).await;

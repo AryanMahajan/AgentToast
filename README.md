@@ -1,9 +1,10 @@
 # AgentToast
 
-**Desktop notifications for Claude Code, with the answer buttons in the notification.**
+**Desktop notifications for Claude Code and Antigravity, with the answer buttons in
+the notification.**
 
-You give Claude Code a task and switch to something else. It hits a command that
-needs your approval and waits — and you don't notice for twenty minutes.
+You give your coding agent a task and switch to something else. It hits a command
+that needs your approval and waits — and you don't notice for twenty minutes.
 
 AgentToast puts that on your desktop the moment it happens:
 
@@ -17,7 +18,7 @@ AgentToast puts that on your desktop the moment it happens:
 └──────────────────────────────────────────────┘
 ```
 
-Answer it there and Claude carries on. No switching windows.
+Answer it there and the agent carries on. No switching windows.
 
 It also tells you when Claude **asks a question**, and when it **finishes**:
 
@@ -43,19 +44,37 @@ asking — you get **no toasts**, because Claude is not asking. Switch back to
 A tool that notified you on every tool call would override the very setting you
 chose. This one cannot, because it never sees the calls Claude handles itself.
 
-## How it works
-
-Claude Code can run a program whenever it needs a permission decision. AgentToast
-installs two pieces:
-
-- **AgentToast** — a tray app that draws the toasts and waits for your click
-- **agenttoast-bridge-claude** — a small program Claude Code runs when it needs an
-  answer, which asks the tray app and reports back
-
-They talk over a local named pipe. Nothing leaves your machine.
+**Antigravity works differently.** It has no equivalent event — nothing that means
+"the agent has decided it needs a human". Its only gate is `PreToolUse`, which
+fires for every tool that matches, whether or not Antigravity would have asked. So
+there the matcher does the filtering, and it is set by default to the calls that
+change something:
 
 ```
-Claude Code needs permission
+run_command  write_to_file  create_file  replace_file_content  edit_notebook  delete_file
+```
+
+Reading a file, listing a directory or searching the codebase raises nothing.
+
+**And Antigravity always asks you as well.** Its hooks can deny a call or force a
+prompt, but there is no way for one to *grant* permission — so a toast there is a
+heads-up and a kill switch rather than a replacement for its prompt. Deny stops
+the call outright; Approve lets it go on to Antigravity's own confirmation.
+
+## How it works
+
+Both agents can run a program of your choosing when something happens. AgentToast
+installs a tray app and one small bridge program per agent:
+
+- **AgentToast** — a tray app that draws the toasts and waits for your click
+- **agenttoast-bridge-claude** — run by Claude Code when it needs an answer
+- **agenttoast-bridge-agy** — the same for Antigravity
+
+A bridge asks the tray app and reports the answer back. They talk over a local
+named pipe. Nothing leaves your machine.
+
+```
+agent needs permission
         │
         ▼
     bridge  ──── named pipe ────▶  AgentToast (tray)
@@ -64,10 +83,10 @@ Claude Code needs permission
         │                               │
         ◀────── your answer ◀───── you click a button
         │
-   Claude continues
+   the agent continues
 ```
 
-Four Claude Code hooks are used, and none of them block longer than they must:
+Claude Code hooks, none of them blocking longer than they must:
 
 | Hook | Raises |
 | :--- | :--- |
@@ -76,11 +95,23 @@ Four Claude Code hooks are used, and none of them block longer than they must:
 | `Notification` | "Claude is waiting for you", if you have a notification channel set |
 | `SessionStart` / `SessionEnd` | no toast; keeps the session list current |
 
+Antigravity hooks:
+
+| Hook | Raises |
+| :--- | :--- |
+| `PreToolUse` | the toast, for matching tools only — Deny blocks the call, Approve hands it back to Antigravity's own prompt |
+| `Stop` | the auto-dismissing "finished" toast |
+
+Antigravity has no session lifecycle hooks, so its sessions appear in the
+dashboard the first time they raise something.
+
 ## Requirements
 
 - **Windows 10 or 11.** The tray app, the named pipe and the window handling are
   Windows-specific today. macOS and Linux are not supported.
-- **Claude Code**, with a version that supports the `PermissionRequest` hook.
+- **At least one supported agent**:
+  - **Claude Code**, with a version that supports the `PermissionRequest` hook, or
+  - **Antigravity** (`agy`), with a version that supports `hooks.json`.
 
 ## Install
 
@@ -99,11 +130,12 @@ Then:
 1. Launch **AgentToast**. It appears in the system tray. (Windows 11 hides new tray
    icons — click the `^` next to the clock, and drag it out to pin it.)
 2. **Left-click the tray icon** to open the dashboard.
-3. Under **Claude Code**, press **Connect** on *Every project*.
-4. **Restart any Claude Code session** that is already running. Hooks are read when
-   a session starts.
+3. Press **Connect** — under **Claude Code** on *Every project*, under
+   **Antigravity** on *This machine*, or both.
+4. **Restart any session** that is already running. Both agents read their hooks
+   when a session starts.
 
-That's it. Next time Claude needs your approval, you get a toast.
+That's it. Next time the agent needs your approval, you get a toast.
 
 ### Connecting one project instead of all of them
 
@@ -125,6 +157,40 @@ Claude Code report an error on every tool call.
 If you would rather wire it up by hand, copy `config/hooks/claude-hooks.json` into
 your settings and replace `agenttoast-bridge-claude` with the full path to the
 installed bridge.
+
+### Connecting Antigravity
+
+Under **Antigravity**, press **Connect** on *This machine*, then start a new `agy`
+session.
+
+**A session that was already open will not pick this up.** Antigravity reads
+`hooks.json` once, at startup, and says so only in its own log (`loaded 0 named
+hooks`). An older session goes on prompting in the terminal exactly as it did
+before, with nothing to indicate that AgentToast is connected but not being asked.
+Close it and start a new one.
+
+Two more things differ from Claude Code:
+
+- **There is nothing to set up per project.** Antigravity's other place for hooks
+  is a workspace's `.agents/hooks.json`, which is meant to be committed and shared
+  with your team, and a machine-local absolute path does not belong in a
+  repository. AgentToast only writes the global file, `~/.gemini/config/hooks.json`.
+- **The install path must not contain a space.** Antigravity splits a hook command
+  on whitespace and does not honour quotes, so there is no way to express one. The
+  default install location is fine; `C:\Program Files\...` is not, and Connect
+  will say so rather than writing a hook that fails on every tool call.
+
+The file is backed up to `hooks.json.agenttoast-backup` first, and hooks belonging
+to other tools — which Antigravity files under their own names — are left alone.
+
+To wire it up by hand instead, copy `config/hooks/agy-hooks.json` into
+`~/.gemini/config/hooks.json` and replace `agenttoast-bridge-agy` with the full
+path to the installed bridge.
+
+**Disconnect before uninstalling.** This matters more here than it does for Claude
+Code: a `PreToolUse` hook that fails does not degrade to "carry on without it", it
+fails the tool call. A hook pointing at a deleted bridge stops the agent doing
+anything at all.
 
 ## Using it
 
@@ -169,10 +235,10 @@ what that means.
 
 - The bridge and tray app talk over a **local named pipe**, guarded by a token
   written to `~/.agenttoast/auth_token`. Nothing is exposed to the network.
-- **Connect writes to Claude Code's settings file.** That is the whole feature, but
-  it is your config — hence the backup, and the fact that other tools' hooks are
-  never touched.
-- A toast can only ever answer a question Claude Code actually asked.
+- **Connect writes to the agent's own config file** — Claude Code's settings, or
+  Antigravity's `hooks.json`. That is the whole feature, but it is your config —
+  hence the backup, and the fact that other tools' hooks are never touched.
+- A toast can only ever answer a question the agent actually asked.
 
 ## Building
 
@@ -194,10 +260,10 @@ cargo tauri build --config src-tauri/tauri.bundle.conf.json
 
 The installer lands in `target/release/bundle/nsis/`.
 
-**That `--config` flag is required.** The bridge is a second binary that has to be
-bundled alongside the app, and Tauri checks resource paths at compile time — so
-declaring it in the main config would break a plain `cargo build`. The extra file
-adds it only when packaging.
+**That `--config` flag is required.** The bridges are separate binaries that have
+to be bundled alongside the app, and Tauri checks resource paths at compile time —
+so declaring them in the main config would break a plain `cargo build`. The extra
+file adds them only when packaging.
 
 ## Status
 
@@ -207,8 +273,13 @@ Working and in daily use, but early. Known gaps:
 - **Open Session** raises the right terminal window when it can identify it, and
   otherwise raises all of them so you can pick. It cannot switch to the right *tab*
   — no supported API for that.
-- **Antigravity** is not supported yet, despite the name suggesting a general tool.
-  The architecture allows for it; the adapter does not exist.
+- **Antigravity toasts can deny, but not approve.** Its hook interface has no way
+  to grant permission — a hook can block a call or force a prompt, never allow
+  one — so Antigravity always asks in its own terminal as well. Deny from the
+  toast genuinely blocks the call.
+- **Antigravity toasts cannot follow its permission mode.** Its `PreToolUse` hook
+  carries no signal about whether Antigravity would have prompted you, so the
+  matcher is the only filter available. Narrow it if the defaults are too chatty.
 
 ## License
 

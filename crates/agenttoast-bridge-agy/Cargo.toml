@@ -1,0 +1,21 @@
+[package]
+name = "agenttoast-bridge-agy"
+version.workspace = true
+edition.workspace = true
+description = "Antigravity (agy) hook bridge for AgentToast"
+
+[[bin]]
+name = "agenttoast-bridge-agy"
+path = "src/main.rs"
+
+[dependencies]
+agenttoast-core = { path = "../agenttoast-core" }
+agenttoast-ipc = { path = "../agenttoast-ipc" }
+agenttoast-adapters = { path = "../agenttoast-adapters" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }

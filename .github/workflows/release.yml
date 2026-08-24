@@ -51,9 +51,9 @@ jobs:
       - name: Install the Tauri CLI
         run: cargo binstall tauri-cli --version "^2" --no-confirm --locked
 
-      # The extra config adds the bridge binary to the bundle. It is kept out of
-      # the main config because Tauri checks resource paths at compile time,
-      # which would break a plain `cargo build`.
+      # The extra config adds the bridge binaries to the bundle. They are kept
+      # out of the main config because Tauri checks resource paths at compile
+      # time, which would break a plain `cargo build`.
       - name: Build the installer
         run: cargo tauri build --config src-tauri/tauri.bundle.conf.json
 
@@ -78,5 +78,6 @@ jobs:
             not code-signed. Choose **More info → Run anyway**.
 
             After installing, open the dashboard from the tray icon and press
-            **Connect** under *Claude Code*, then restart any running Claude
-            Code session.
+            **Connect** — under *Claude Code*, under *Antigravity*, or both —
+            then restart any session that is already running. Both agents read
+            their hooks when a session starts.

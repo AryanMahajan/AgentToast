@@ -39,6 +39,15 @@ pub enum HookKind {
     /// overrides a choice the user deliberately made. Supported for anyone who
     /// wants a toast on everything, but not what gets configured by default.
     PreToolUse,
+    /// Claude Code wants to tell the user something — most usefully, that it
+    /// is waiting on an answer to a question. Nothing is blocked on the hook,
+    /// and a hook has no way to send an answer back, so this only raises a
+    /// toast that offers to take the user to the session.
+    Notification,
+    /// Claude has finished its turn. Fires unconditionally, unlike a
+    /// notification, which only fires when Claude Code has a notification
+    /// channel configured to send one through.
+    Stop,
     /// A session started — record it in the registry.
     SessionStart,
     /// A session ended — drop it from the registry.
@@ -55,6 +64,8 @@ impl HookKind {
             Some("SessionStart") => HookKind::SessionStart,
             Some("SessionEnd") => HookKind::SessionEnd,
             Some("PreToolUse") => HookKind::PreToolUse,
+            Some("Notification") => HookKind::Notification,
+            Some("Stop") => HookKind::Stop,
             _ => HookKind::PermissionRequest,
         }
     }
@@ -227,6 +238,15 @@ fn build_message(tool_name: &str, tool_input: &Option<Value>) -> String {
 
 fn build_message_from_input(tool_name: &str, tool_input: &Option<Value>) -> String {
     match tool_name {
+        // Claude asking the user something rather than doing something. The
+        // question itself is the only useful headline — "wants to use tool:
+        // AskUserQuestion" tells the reader nothing about what is being asked.
+        "AskUserQuestion" => {
+            if let Some(question) = first_question(tool_input) {
+                return question;
+            }
+            "Claude has a question".to_string()
+        }
         "Bash" => {
             if let Some(input) = tool_input {
                 if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
@@ -356,8 +376,11 @@ impl ClaudeAdapter {
         match kind {
             HookKind::PreToolUse => self.format_response(action, text).map(Some),
             HookKind::PermissionRequest => self.format_permission_request(action),
-            // Lifecycle events carry no decision.
-            HookKind::SessionStart | HookKind::SessionEnd => Ok(None),
+            // Nothing is waiting on these.
+            HookKind::Notification
+            | HookKind::Stop
+            | HookKind::SessionStart
+            | HookKind::SessionEnd => Ok(None),
         }
     }
 
@@ -471,5 +494,329 @@ mod permission_request_tests {
 
         let event = ClaudeAdapter.parse_hook_payload(&payload).unwrap();
         assert_eq!(event.message, "Claude wants to run: npm run migrate");
+    }
+}
+
+/// A `Notification` hook payload.
+#[derive(Debug, Deserialize)]
+pub struct ClaudeNotification {
+    pub session_id: String,
+    /// What Claude wants to say.
+    pub message: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// What prompted it — `elicitation` when Claude is asking a question,
+    /// `permission_request` when it is waiting on a permission prompt, and so
+    /// on.
+    #[serde(default)]
+    pub notification_type: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+impl ClaudeAdapter {
+    /// Turn a `Notification` payload into a toast, if it is worth one.
+    ///
+    /// Only two notification types earn a toast, and everything else is
+    /// ignored. An allowlist rather than a denylist on purpose: permission
+    /// prompts already raise their own toast with real Approve and Deny
+    /// buttons, and a notification reading only "Claude needs your permission"
+    /// duplicates it while carrying less. Anything unrecognised — a new type,
+    /// an auth message — stays silent rather than becoming noise.
+    pub fn parse_notification(&self, payload: &Value) -> Result<Option<AttentionEvent>> {
+        let data: ClaudeNotification = serde_json::from_value(payload.clone())
+            .context("Failed to parse Claude Code notification payload")?;
+
+        let kind = data.notification_type.as_deref().unwrap_or_default();
+        let message = data.message.trim();
+
+        let mut event = match kind {
+            // Claude has finished, and nobody is necessarily watching.
+            AGENT_COMPLETED => {
+                let headline = if message.is_empty() {
+                    "Claude finished"
+                } else {
+                    message
+                };
+                AttentionEvent::completed(&data.session_id, "claude", headline)
+            }
+            // Claude is waiting on the user in the session. A hook cannot send
+            // an answer, so the toast says so and offers to take them there.
+            AGENT_NEEDS_INPUT => {
+                let headline = if message.is_empty() {
+                    "Claude is waiting for you"
+                } else {
+                    message
+                };
+                AttentionEvent::notification(&data.session_id, "claude", headline)
+            }
+            other => {
+                debug!(notification_type = other, "Notification not worth a toast");
+                return Ok(None);
+            }
+        };
+
+        event.cwd = data.cwd;
+        // The title is a short label like "Claude Code"; keep it as detail
+        // rather than the headline, which the message already is.
+        event.context = data.title.filter(|t| !t.trim().is_empty());
+
+        debug!(
+            session_id = %data.session_id,
+            notification_type = kind,
+            "Parsed Claude Code notification"
+        );
+
+        Ok(Some(event))
+    }
+}
+
+/// The first question out of an `AskUserQuestion` payload.
+///
+/// The tool takes a list, but a toast has room for one; the rest are visible in
+/// the session. Shaped as `{ "questions": [ { "question": "...", ... } ] }`.
+fn first_question(tool_input: &Option<Value>) -> Option<String> {
+    let text = tool_input
+        .as_ref()?
+        .get("questions")?
+        .as_array()?
+        .first()?
+        .get("question")?
+        .as_str()?
+        .trim();
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// Claude has stopped working.
+const AGENT_COMPLETED: &str = "agent_completed";
+/// Claude is waiting on the user.
+const AGENT_NEEDS_INPUT: &str = "agent_needs_input";
+
+#[cfg(test)]
+mod question_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// `AskUserQuestion` arrives as a permission request like any other tool,
+    /// so without special handling the toast reads "Claude wants to use tool:
+    /// AskUserQuestion" — which says nothing about what is being asked.
+    #[test]
+    fn a_question_becomes_the_headline() {
+        let payload = json!({
+            "session_id": "s1",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {
+                "questions": [
+                    { "question": "Which target should I build?",
+                      "options": [{ "label": "toastd" }, { "label": "toastctl" }] }
+                ]
+            }
+        });
+
+        let event = ClaudeAdapter.parse_hook_payload(&payload).unwrap();
+        assert_eq!(event.message, "Which target should I build?");
+    }
+
+    #[test]
+    fn a_question_without_text_still_reads_sensibly() {
+        let payload = json!({
+            "session_id": "s1",
+            "tool_name": "AskUserQuestion",
+            "tool_input": { "questions": [] }
+        });
+
+        let event = ClaudeAdapter.parse_hook_payload(&payload).unwrap();
+        assert_eq!(event.message, "Claude has a question");
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use agenttoast_core::SessionState;
+    use serde_json::json;
+
+    fn notify(kind: &str, message: &str) -> Option<AttentionEvent> {
+        ClaudeAdapter
+            .parse_notification(&json!({
+                "session_id": "s1",
+                "hook_event_name": "Notification",
+                "notification_type": kind,
+                "message": message
+            }))
+            .unwrap()
+    }
+
+    #[test]
+    fn finishing_work_auto_dismisses() {
+        let event = notify("agent_completed", "Ran the test suite").expect("worth a toast");
+        assert_eq!(event.state, SessionState::Completed);
+        assert_eq!(event.message, "Ran the test suite");
+    }
+
+    #[test]
+    fn waiting_on_the_user_stays_up() {
+        let event = notify("agent_needs_input", "Claude is waiting").expect("worth a toast");
+        assert_eq!(event.state, SessionState::WaitingForInput);
+    }
+
+    /// A denylist let "Claude needs your permission" through, duplicating the
+    /// toast the PermissionRequest hook already raises with real buttons.
+    /// Unknown types must stay silent rather than become noise.
+    #[test]
+    fn everything_else_stays_silent() {
+        for kind in ["permission_request", "tool_use", "auth_success", "something_new", ""] {
+            assert!(
+                notify(kind, "Claude needs your permission").is_none(),
+                "{kind} should not raise a toast"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_message_still_says_something() {
+        assert_eq!(
+            notify("agent_completed", "").unwrap().message,
+            "Claude finished"
+        );
+    }
+}
+
+/// A `Stop` hook payload — Claude has finished its turn.
+#[derive(Debug, Deserialize)]
+pub struct ClaudeStop {
+    pub session_id: String,
+    /// True when this hook is running because of an earlier stop hook. Used to
+    /// avoid reacting to our own tail.
+    #[serde(default)]
+    pub stop_hook_active: bool,
+    /// What Claude last said, which is the most useful summary of what it did.
+    #[serde(default)]
+    pub last_assistant_message: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+/// Longest headline worth putting on a toast before it stops being glanceable.
+const HEADLINE_LIMIT: usize = 90;
+
+impl ClaudeAdapter {
+    /// Turn a `Stop` payload into a "finished" toast.
+    pub fn parse_stop(&self, payload: &Value) -> Result<Option<AttentionEvent>> {
+        let data: ClaudeStop = serde_json::from_value(payload.clone())
+            .context("Failed to parse Claude Code stop payload")?;
+
+        if data.stop_hook_active {
+            debug!("Stop hook re-entered; not raising another toast");
+            return Ok(None);
+        }
+
+        let headline = data
+            .last_assistant_message
+            .as_deref()
+            .and_then(first_line)
+            .unwrap_or_else(|| "Claude finished".to_string());
+
+        let mut event = AttentionEvent::completed(&data.session_id, "claude", headline);
+        event.cwd = data.cwd;
+        event.context = data.last_assistant_message;
+
+        debug!(session_id = %data.session_id, "Claude finished its turn");
+        Ok(Some(event))
+    }
+}
+
+/// The first meaningful line of a message, shortened to fit a toast.
+///
+/// Claude's closing message is often several paragraphs of markdown; the first
+/// line is almost always the summary, and the rest is detail the user can read
+/// in the session.
+fn first_line(message: &str) -> Option<String> {
+    let line = message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("```"))?;
+
+    if line.chars().count() <= HEADLINE_LIMIT {
+        return Some(line.to_string());
+    }
+
+    let cut: String = line.chars().take(HEADLINE_LIMIT).collect();
+    // Prefer breaking at a word boundary rather than mid-word.
+    let cut = match cut.rsplit_once(' ') {
+        Some((head, _)) if head.chars().count() > HEADLINE_LIMIT / 2 => head.to_string(),
+        _ => cut,
+    };
+    Some(format!("{}…", cut.trim_end_matches(['.', ',', ' '])))
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+    use agenttoast_core::SessionState;
+    use serde_json::json;
+
+    fn stop(payload: Value) -> Option<AttentionEvent> {
+        ClaudeAdapter.parse_stop(&payload).unwrap()
+    }
+
+    #[test]
+    fn finishing_raises_an_auto_dismissing_toast() {
+        let event = stop(json!({
+            "session_id": "s1",
+            "hook_event_name": "Stop",
+            "stop_hook_active": false,
+            "last_assistant_message": "Deleted hello.txt (6 bytes, contained just hello)."
+        }))
+        .expect("finishing is worth a toast");
+
+        assert_eq!(event.state, SessionState::Completed);
+        assert_eq!(
+            event.message,
+            "Deleted hello.txt (6 bytes, contained just hello)."
+        );
+    }
+
+    /// Claude's closing message is often several paragraphs; the first line is
+    /// the summary and the rest belongs in the session.
+    #[test]
+    fn only_the_first_line_becomes_the_headline() {
+        let event = stop(json!({
+            "session_id": "s1",
+            "last_assistant_message": "Ran the test suite.\n\n- 27 passed\n- 0 failed"
+        }))
+        .unwrap();
+
+        assert_eq!(event.message, "Ran the test suite.");
+        // The whole message is still available as detail.
+        assert!(event.context.unwrap().contains("27 passed"));
+    }
+
+    #[test]
+    fn a_long_line_is_shortened_at_a_word_boundary() {
+        let long = "a".repeat(40) + " " + &"b".repeat(80);
+        let event = stop(json!({ "session_id": "s1", "last_assistant_message": long })).unwrap();
+
+        assert!(event.message.chars().count() <= HEADLINE_LIMIT + 1);
+        assert!(event.message.ends_with('…'));
+    }
+
+    #[test]
+    fn a_silent_finish_still_says_something() {
+        let event = stop(json!({ "session_id": "s1" })).unwrap();
+        assert_eq!(event.message, "Claude finished");
+    }
+
+    /// The hook re-runs when a stop hook itself caused the stop; reacting again
+    /// would stack toasts for one turn.
+    #[test]
+    fn re_entry_raises_nothing() {
+        assert!(stop(json!({ "session_id": "s1", "stop_hook_active": true })).is_none());
     }
 }

@@ -54,6 +54,14 @@ pub async fn start(app_handle: AppHandle) {
                     handle_attention(&app, &state, event, incoming.response_tx).await;
                 }
 
+                IpcMessage::Notify { event } => {
+                    // Nothing is waiting on this one, so acknowledge before
+                    // showing anything: the agent should not be held up by a
+                    // toast it cannot receive an answer from.
+                    let _ = incoming.response_tx.send(IpcResponse::ack());
+                    show_notification(&app, &state, event).await;
+                }
+
                 IpcMessage::Deregister { session_id } => {
                     state.sessions.deregister(&session_id).await;
                     let _ = incoming.response_tx.send(IpcResponse::ack());
@@ -172,4 +180,33 @@ async fn handle_attention(
             let _ = response_tx.send(IpcResponse::error("Event cancelled"));
         }
     }
+}
+
+/// Show a toast for something the agent wants to say.
+///
+/// No router entry and no waiting: the toast is informational, and its only
+/// action takes the user to the session where they can actually answer.
+async fn show_notification(app: &AppHandle, state: &Arc<AppState>, event: AttentionEvent) {
+    let session_id = event.session_id.clone();
+
+    info!(
+        event_id = %event.event_id,
+        session_id = %session_id,
+        message = %event.message,
+        "Received notification"
+    );
+
+    if state.sessions.get(&session_id).await.is_none() {
+        let mut session = Session::new(&session_id, AgentType::ClaudeCode);
+        session.working_directory = event.cwd.clone();
+        session.process_id = event.process_id;
+        state.sessions.register(session).await;
+    }
+
+    state.sessions.set_attention(&session_id, event.clone()).await;
+
+    if let Err(e) = window::show_toast(app, &event) {
+        error!(error = %e, "Failed to show notification toast");
+    }
+    let _ = app.emit("attention-event", &event);
 }

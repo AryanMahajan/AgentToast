@@ -25,6 +25,13 @@ use std::path::{Path, PathBuf};
 /// chose: in `auto` or `acceptEdits` they have explicitly said "stop asking",
 /// and a toast on every call ignores that.
 const PERMISSION_REQUEST: &str = "PermissionRequest";
+/// Claude Code telling the user something. Only two of its notification types
+/// earn a toast — finished, and waiting on you — and the adapter ignores the
+/// rest.
+const NOTIFICATION: &str = "Notification";
+/// Claude finishing its turn. Unlike a notification this needs no channel
+/// configured, so it is the one that reliably says "the work is done".
+const STOP: &str = "Stop";
 const SESSION_START: &str = "SessionStart";
 const SESSION_END: &str = "SessionEnd";
 
@@ -33,8 +40,8 @@ const SESSION_END: &str = "SessionEnd";
 /// an answer.
 const NO_MATCHER: Option<&str> = None;
 
-/// Left behind by earlier versions, which hooked PreToolUse. Recognised so
-/// connecting cleans it up rather than leaving both wired at once.
+/// Events we used to hook and no longer do, recognised so connecting cleans
+/// them up rather than leaving several wired at once.
 const SUPERSEDED_EVENTS: [&str; 1] = ["PreToolUse"];
 
 /// Only start a session on a real start or resume, not on every clear/compact.
@@ -194,7 +201,7 @@ pub fn disconnect(scope: &Scope) -> Result<HookStatus, String> {
         .and_then(|o| o.get_mut("hooks"))
         .and_then(|h| h.as_object_mut())
     {
-        for event in [PERMISSION_REQUEST, SESSION_START, SESSION_END] {
+        for event in [PERMISSION_REQUEST, NOTIFICATION, STOP, SESSION_START, SESSION_END] {
             remove_ours(hooks, event);
         }
         for event in SUPERSEDED_EVENTS {
@@ -242,7 +249,7 @@ fn write_settings(path: &Path, settings: &Value) -> Result<(), String> {
 fn find_bridge_command(settings: &Value) -> Option<String> {
     let hooks = settings.get("hooks")?.as_object()?;
 
-    for event in [PERMISSION_REQUEST, SESSION_START, SESSION_END, "PreToolUse"] {
+    for event in [PERMISSION_REQUEST, NOTIFICATION, STOP, SESSION_START, SESSION_END, "PreToolUse"] {
         let Some(groups) = hooks.get(event).and_then(|g| g.as_array()) else {
             continue;
         };
@@ -268,6 +275,8 @@ fn find_bridge_command(settings: &Value) -> Option<String> {
 /// one and the tests — cannot drift apart on it.
 fn apply_hooks(hooks: &mut Map<String, Value>, command: &str) {
     upsert(hooks, PERMISSION_REQUEST, NO_MATCHER, command);
+    upsert(hooks, NOTIFICATION, NO_MATCHER, command);
+    upsert(hooks, STOP, NO_MATCHER, command);
     upsert(hooks, SESSION_START, Some(SESSION_START_MATCHER), command);
     upsert(hooks, SESSION_END, NO_MATCHER, command);
 
@@ -402,7 +411,15 @@ mod tests {
 
         assert_eq!(settings["model"], "opus");
         assert_eq!(settings["theme"], "dark");
-        assert_eq!(hooks_of(&settings).len(), 3);
+
+        // Naming them beats counting them: a bare number says nothing about
+        // which event went missing when this breaks.
+        let mut wired: Vec<&str> = hooks_of(&settings).keys().map(String::as_str).collect();
+        wired.sort_unstable();
+        assert_eq!(
+            wired,
+            vec![NOTIFICATION, PERMISSION_REQUEST, SESSION_END, SESSION_START, STOP]
+        );
     }
 
     #[test]
@@ -484,7 +501,7 @@ mod tests {
         let hooks = settings.as_object_mut().unwrap()["hooks"]
             .as_object_mut()
             .unwrap();
-        for event in [PERMISSION_REQUEST, SESSION_START, SESSION_END] {
+        for event in [PERMISSION_REQUEST, NOTIFICATION, STOP, SESSION_START, SESSION_END] {
             remove_ours(hooks, event);
         }
         for event in SUPERSEDED_EVENTS {

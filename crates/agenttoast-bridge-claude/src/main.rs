@@ -61,6 +61,13 @@ async fn run() -> Result<()> {
         HookKind::SessionEnd => {
             return deregister_session(&config, &auth_token, &payload).await;
         }
+        HookKind::Notification => {
+            return raise_toast(&config, &auth_token, ClaudeAdapter.parse_notification(&payload)?)
+                .await;
+        }
+        HookKind::Stop => {
+            return raise_toast(&config, &auth_token, ClaudeAdapter.parse_stop(&payload)?).await;
+        }
         HookKind::PermissionRequest | HookKind::PreToolUse => {}
     }
 
@@ -131,6 +138,31 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Raise a toast for something Claude wants to say, and return at once.
+///
+/// Deliberately not blocking. Nothing is waiting on the answer — Claude has
+/// either finished or is already showing its own prompt — so holding the hook
+/// open would only risk delaying the session for a toast that cannot reply.
+async fn raise_toast(
+    config: &AppConfig,
+    auth_token: &str,
+    event: Option<agenttoast_core::event::AttentionEvent>,
+) -> Result<()> {
+    let Some(event) = event else {
+        debug!("Nothing worth a toast");
+        return Ok(());
+    };
+
+    info!(
+        session_id = %event.session_id,
+        state = ?event.state,
+        message = %event.message,
+        "Raising an unprompted toast"
+    );
+
+    notify(config, auth_token, &IpcMessage::Notify { event }).await
 }
 
 /// Announce a new session so the registry knows about it before any tool runs.

@@ -109,6 +109,63 @@ impl AttentionEvent {
         }
     }
 
+    /// Create an event for something the agent wants to tell the user about.
+    ///
+    /// Unlike a permission request, nothing is blocked on the answer: Claude
+    /// Code is already waiting on its own prompt, and the toast exists to say so
+    /// and offer a way there. The only action is to open the session, because a
+    /// hook has no channel to send an answer back through.
+    pub fn notification(
+        session_id: impl Into<String>,
+        agent: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_id: Uuid::new_v4(),
+            session_id: session_id.into(),
+            agent: agent.into(),
+            state: crate::SessionState::WaitingForInput,
+            message: message.into(),
+            context: None,
+            actions: vec![Action {
+                action_type: ActionType::OpenSession,
+                label: "Open Session".into(),
+            }],
+            timestamp: Utc::now(),
+            tool_name: None,
+            cwd: None,
+            process_id: None,
+        }
+    }
+
+    /// Create an event for work that has finished.
+    ///
+    /// Carries no action and is auto-dismissing: there is nothing to decide,
+    /// and the point is to be seen by someone who walked away, not to be
+    /// cleared by someone who did not.
+    pub fn completed(
+        session_id: impl Into<String>,
+        agent: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_id: Uuid::new_v4(),
+            session_id: session_id.into(),
+            agent: agent.into(),
+            state: crate::SessionState::Completed,
+            message: message.into(),
+            context: None,
+            actions: vec![Action {
+                action_type: ActionType::OpenSession,
+                label: "Open Session".into(),
+            }],
+            timestamp: Utc::now(),
+            tool_name: None,
+            cwd: None,
+            process_id: None,
+        }
+    }
+
     /// Create a new confirmation request event (yes/no).
     pub fn confirmation_request(
         session_id: impl Into<String>,

@@ -90,11 +90,12 @@ pub async fn respond_to_event(
         text_input,
     };
 
-    state
-        .router
-        .resolve(response)
-        .await
-        .map_err(|e| format!("Failed to resolve event: {}", e))?;
+    // A notification toast has no pending request behind it, and an event
+    // answered from the dashboard is already gone by the time its toast is
+    // clicked. Neither is an error — the toast simply closes.
+    if let Err(e) = state.router.resolve(response).await {
+        tracing::debug!(event_id = %event_id, reason = %e, "Nothing was waiting on this answer");
+    }
 
     Ok(())
 }

@@ -1,11 +1,11 @@
-# 🍞 AgentToast
+# AgentToast
 
 **Desktop notifications for Claude Code, with the answer buttons in the notification.**
 
 You give Claude Code a task and switch to something else. It hits a command that
 needs your approval and waits — and you don't notice for twenty minutes.
 
-AgentToast puts that request on your desktop the moment it happens:
+AgentToast puts that on your desktop the moment it happens:
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -18,6 +18,30 @@ AgentToast puts that request on your desktop the moment it happens:
 ```
 
 Answer it there and Claude carries on. No switching windows.
+
+It also tells you when Claude **asks a question**, and when it **finishes**:
+
+```
+┌──────────────────────────────────────────────┐        ┌────────────────────────────────┐
+│  C   Claude Code · Question              now │        │  C   Claude Code · Done    now │
+│      Which target should I build?            │        │      Ran the test suite.       │
+│                                 Open Session │        │                                │
+└──────────────────────────────────────────────┘        └────────────────────────────────┘
+   stays until you deal with it                            clears itself after 6s
+```
+
+## It respects your permission mode
+
+This is the part that matters, and it is why AgentToast hooks
+**`PermissionRequest`** rather than every tool call.
+
+`PermissionRequest` fires only once Claude Code has decided it needs a human. So
+in `auto` or `acceptEdits` — where you have deliberately told Claude to stop
+asking — you get **no toasts**, because Claude is not asking. Switch back to
+`default` and they return.
+
+A tool that notified you on every tool call would override the very setting you
+chose. This one cannot, because it never sees the calls Claude handles itself.
 
 ## How it works
 
@@ -43,10 +67,14 @@ Claude Code needs permission
    Claude continues
 ```
 
-It hooks **`PermissionRequest`**, which fires only when Claude Code has decided it
-needs a human. That matters: it means AgentToast respects your permission mode. In
-`auto` or `acceptEdits`, where you have told Claude to stop asking, you get no
-toasts — because Claude is not asking.
+Four Claude Code hooks are used, and none of them block longer than they must:
+
+| Hook | Raises |
+| :--- | :--- |
+| `PermissionRequest` | the approval toast — the only one that waits for you |
+| `Stop` | the auto-dismissing "finished" toast |
+| `Notification` | "Claude is waiting for you", if you have a notification channel set |
+| `SessionStart` / `SessionEnd` | no toast; keeps the session list current |
 
 ## Requirements
 
@@ -62,6 +90,9 @@ Download the latest `AgentToast_x.y.z_x64-setup.exe` from
 Windows will warn you that the publisher is unknown, because the installer is not
 code-signed. Choose **More info → Run anyway**. If you would rather not, build it
 yourself — see [Building](#building) below.
+
+Updating over an existing install is fine: the installer closes AgentToast first.
+(Before 0.1.1 it did not, and silently left the old version in place.)
 
 Then:
 
@@ -99,6 +130,12 @@ installed bridge.
 
 **The toast.** Approve or Deny answers Claude directly. **Open Session** raises the
 terminal and hands the decision back, so Claude asks you there instead.
+
+**Questions.** When Claude asks something, the question itself is the headline.
+A hook cannot send an answer back, so the toast takes you to the session.
+
+**Finishing.** A "Done" toast appears when Claude ends its turn and clears itself
+after six seconds.
 
 **Closing a toast does not answer it.** The `×` hides the card; the request stays
 pending and Claude keeps waiting. Reopen it from the dashboard, or wait — an

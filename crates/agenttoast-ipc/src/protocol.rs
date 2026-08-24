@@ -22,6 +22,12 @@ pub enum IpcMessage {
         #[serde(flatten)]
         event: AttentionEvent,
     },
+    /// Something the user should know about, with nothing waiting on a reply.
+    /// The daemon shows a toast and acknowledges immediately.
+    Notify {
+        #[serde(flatten)]
+        event: AttentionEvent,
+    },
     /// Deregister a session
     Deregister {
         session_id: String,

@@ -1,7 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "AgentToast",
-  "version": "0.1.0",
   "identifier": "com.agenttoast.app",
   "build": {
     "frontendDist": "../ui",
@@ -24,6 +23,11 @@
       "icons/128x128.png",
       "icons/[email protected]",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
+    }
   }
 }

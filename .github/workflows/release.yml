@@ -37,6 +37,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # The dashboard is a React app built by Vite, and `beforeBuildCommand`
+      # runs `npm run build`, so the Tauri build needs Node and the packages.
+      # Installing here rather than in `beforeBuildCommand` keeps a local build
+      # from reinstalling everything each time it runs.
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install front-end packages
+        run: npm ci
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:

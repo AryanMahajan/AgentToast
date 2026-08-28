@@ -4,6 +4,7 @@
 //! payload format and AgentToast's generic event model.
 
 pub mod agy;
+pub mod agy_permissions;
 pub mod claude;
 
 use agenttoast_core::event::{ActionType, AttentionEvent};

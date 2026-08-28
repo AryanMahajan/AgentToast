@@ -19,7 +19,7 @@ use agenttoast_core::config::AppConfig;
 use agenttoast_core::router::ActionRouter;
 use agenttoast_core::session::SessionRegistry;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Shared application state accessible from Tauri commands.
 pub struct AppState {
@@ -91,8 +91,28 @@ fn main() {
             commands::agy_hook_status,
             commands::connect_agy_hooks,
             commands::disconnect_agy_hooks,
+            commands::agy_approval_status,
+            commands::enable_agy_approval,
+            commands::disable_agy_approval,
         ])
         .setup(|app| {
+            // A grant with no hook behind it is a standing instruction to
+            // Antigravity to stop asking. Disconnect gives them back, but the
+            // hooks file can also be edited, replaced or wiped by hand — so
+            // check on every start rather than trusting that it never happened.
+            let bridge = install::agy_bridge_path(app.handle());
+            // Either grant left behind is one too many, so this asks about the
+            // widest scope rather than the configured one.
+            let stranded = agenttoast_adapters::agy_permissions::GRANTS
+                .iter()
+                .any(|g| agenttoast_adapters::agy_permissions::is_granted(g));
+            if !agy_hooks::status(bridge.as_deref()).connected && stranded {
+                match agenttoast_adapters::agy_permissions::disable() {
+                    Ok(()) => info!("Withdrew Antigravity approval grants: no hook to answer them"),
+                    Err(e) => warn!(error = %e, "Could not withdraw stranded Antigravity grants"),
+                }
+            }
+
             // Set up system tray
             tray::setup_tray(app)?;
 

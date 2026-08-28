@@ -1,0 +1,75 @@
+@import '../tokens.css';
+@import 'tailwindcss';
+
+/* The palette already exists as CSS custom properties in tokens.css, shared
+   with the toast window and switched by `prefers-color-scheme` there. `@theme
+   inline` hands those same variables to Tailwind rather than copying their
+   values, so `bg-surface` and `text-warn` follow the system theme for free and
+   there is still exactly one place a colour is written down.
+
+   Only what the dashboard actually uses is exported; the toast keeps the rest
+   (shadows, avatars, card geometry) to itself. */
+@theme inline {
+    --color-surface: var(--surface);
+    --color-border-soft: var(--border);
+    --color-border-strong: var(--border-strong);
+    --color-fg: var(--fg);
+    --color-fg2: var(--fg2);
+    --color-fg3: var(--fg3);
+    --color-fill: var(--fill);
+    --color-fill-hover: var(--fill-hover);
+
+    --color-accent: var(--accent);
+    --color-accent-on: var(--accent-on);
+    --color-ok: var(--ok);
+    --color-warn: var(--warn);
+    --color-err: var(--err);
+
+    --font-ui: var(--font-ui);
+    --font-small: var(--font-small);
+    --font-mono: var(--font-mono);
+}
+
+/* The window ground. Distinct from --surface so cards read as raised against
+   it, and defined here rather than in tokens.css because the toast window is
+   transparent and must never inherit an opaque background. */
+:root {
+    --page: #f4f5f7;
+    --page-line: rgba(0, 0, 0, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --page: #17181c;
+        --page-line: rgba(255, 255, 255, 0.07);
+    }
+}
+
+@theme inline {
+    --color-page: var(--page);
+    --color-page-line: var(--page-line);
+}
+
+@layer base {
+    html,
+    body {
+        background: var(--page);
+        color: var(--fg);
+        font-family: var(--font-ui);
+        /* A dashboard is a normal window: it scrolls, and text in it is worth
+           selecting. Both differ from the toast. */
+        overflow: auto;
+        cursor: default;
+    }
+
+    /* Long paths read better truncated from the left, so the leaf directory —
+       the part that identifies the project — stays visible. Tailwind has no
+       utility for this pairing, and getting it wrong makes every row useless. */
+    .path-ellipsis {
+        direction: rtl;
+        text-align: left;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}

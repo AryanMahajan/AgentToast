@@ -33,6 +33,68 @@ pub const AGENT_ID: &str = "agy";
 pub const DEFAULT_MATCHER: &str =
     "^(run_command|write_to_file|create_file|replace_file_content|edit_notebook|delete_file)$";
 
+/// Shell commands only.
+///
+/// The narrow half of [`Watch`], for a session that does not want file-edit
+/// toasts.
+pub const COMMAND_MATCHER: &str = "^run_command$";
+
+/// Which calls raise a toast.
+///
+/// This exists because Antigravity gates commands and file edits through two
+/// different mechanisms, and only one of them is a thing a hook can stand in
+/// front of honestly.
+///
+/// - **Commands** are governed by the permission lists, in every execution mode.
+///   A toast for `run_command` is therefore always right.
+/// - **File edits** are governed by the *execution mode*: `default` pauses for a
+///   line-level diff review, and `accept-edits` deliberately does not pause at
+///   all. A toast is right in the first and plainly wrong in the second — it
+///   reintroduces exactly the interruption the mode was chosen to remove.
+///
+/// And the mode cannot be detected. `HookArgsCommon` carries `conversationId`,
+/// `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `executionId`,
+/// `modelName`, `isBattleMode` and `lastUserInput` — no execution mode. Reading
+/// `agentMode` from `settings.json` would only give the startup default, which
+/// `--mode` and Shift+Tab both override without writing anything down, so it
+/// would be wrong precisely when someone had gone out of their way to change it.
+///
+/// So the choice is the user's, made once, and it decides both the matcher and
+/// whether `write_file(*)` is granted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watch {
+    /// Commands and the calls that write to disk.
+    CommandsAndEdits,
+    /// Commands only — the right setting for an `accept-edits` session.
+    CommandsOnly,
+}
+
+impl Watch {
+    /// The `PreToolUse` matcher this scope writes into `hooks.json`.
+    pub fn matcher(self) -> &'static str {
+        match self {
+            Watch::CommandsAndEdits => DEFAULT_MATCHER,
+            Watch::CommandsOnly => COMMAND_MATCHER,
+        }
+    }
+
+    /// Read back the scope a `hooks.json` matcher represents.
+    ///
+    /// Anything unrecognised — a matcher somebody edited by hand — counts as the
+    /// wider scope, since that is the one whose extra grant needs withdrawing.
+    pub fn from_matcher(matcher: &str) -> Self {
+        if matcher == COMMAND_MATCHER {
+            Watch::CommandsOnly
+        } else {
+            Watch::CommandsAndEdits
+        }
+    }
+
+    pub fn watches_edits(self) -> bool {
+        self == Watch::CommandsAndEdits
+    }
+}
+
 /// What a hook payload is asking AgentToast to do.
 ///
 /// Antigravity payloads carry no event name, so the shape is the only signal:
@@ -88,18 +150,22 @@ pub struct AgyToolCall {
 
 /// A `PreToolUse` hook result.
 ///
-/// Flat, unlike Claude Code's nested `hookSpecificOutput` — and carrying two
-/// different answers to the same question, because Antigravity's
-/// `PreToolHookResult` message holds both interfaces at once:
+/// Flat, unlike Claude Code's nested `hookSpecificOutput`, and much smaller than
+/// the message it is decoded into. `PreToolHookResult` also carries `allow_tool`,
+/// `deny_reason`, `overwrite` and `permission_overrides`; none of them are sent,
+/// because none of them change what Antigravity does with a call.
 ///
-/// ```text
-/// decision, reason, overwrite, permission_overrides   <- the "full" interface
-/// allow_tool, deny_reason                             <- the older pair
-/// ```
+/// **A hook cannot grant permission.** `decision: "allow"` is read, parsed
+/// without complaint, and ignored — the call still goes to Antigravity's own
+/// prompt. So are `allowTool: true` and `permissionOverrides`, and so is a grant
+/// written into `settings.json` from inside the hook, because permissions are
+/// read once at session start. Only tightening works: `deny` blocks a call and
+/// overrides an existing grant, and `force_ask` prompts even where a grant would
+/// have let the call through.
 ///
-/// A hook answering `{"decision":"allow"}` was observed being parsed without
-/// complaint and then ignored, with Antigravity going on to raise its own
-/// confirmation prompt anyway. Adding `allow_tool: true` changed nothing.
+/// Approve is therefore *silence*, not a decision — see
+/// [`crate::agy_permissions`], which opens Antigravity's own gate ahead of time
+/// so that saying nothing is the same as saying yes.
 ///
 /// **The result is decoded with protojson.** Antigravity says so itself when it
 /// rejects a malformed one:
@@ -109,83 +175,74 @@ pub struct AgyToolCall {
 /// via protojson: duplicate field "permissionOverrides"
 /// ```
 ///
-/// That settles the spelling question, and warns against hedging it. protojson
-/// accepts *either* the proto field name (`permission_overrides`) or its
-/// `json_name` (`permissionOverrides`) — but sending both is a **duplicate
-/// field**, which fails the parse, and a hook whose result will not parse fails
-/// the tool call outright. So each field is written exactly once, in camelCase,
-/// matching the convention Antigravity documents for its own payloads.
-///
-/// **None of these can approve a call**, and that is Antigravity's design rather
-/// than a spelling problem here. It defines `hook_deny`, `hook_force_ask` and
-/// `hook_deny_unless_prior_grant`, and no `hook_allow`: a hook can tighten
-/// permissions or force a prompt, never loosen one. `decision: "allow"`,
-/// `allowTool: true` and `permissionOverrides` were each tested against a live
-/// session, parsed cleanly, and ignored — while `deny` works and even overrides
-/// an existing grant. Writing the grant into `settings.json` from inside the
-/// hook does not help either, because permissions are read once at session
-/// start.
-///
-/// They are still sent. They cost nothing, they say plainly what the user chose,
-/// and they become correct the day Antigravity grows an allow path. What they do
-/// *not* do is spare the user its confirmation prompt. See `TODO.md`.
+/// protojson accepts *either* a field's proto name (`permission_overrides`) or
+/// its `json_name` (`permissionOverrides`), and treats a message carrying both
+/// as a duplicate field. That is worth knowing even though nothing here hedges
+/// a spelling any more: it is why every field is written exactly once, in
+/// camelCase, matching the convention Antigravity documents for its payloads.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgyHookResponse {
-    /// `allow`, `deny`, `ask`, or `force_ask`.
+    /// `deny` or `force_ask`. Never `allow`, which Antigravity ignores, and
+    /// never `ask`, which honours the allow list and so cannot be told apart
+    /// from approving.
     pub decision: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// The older interface's verdict. Omitted rather than set to `false` when
-    /// handing the decision back: absent means "no opinion" and lets
-    /// Antigravity ask, where `false` would deny outright.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_tool: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deny_reason: Option<String>,
-    /// Temporary permission grants — what actually lets the call through.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub permission_overrides: Vec<String>,
 }
 
 impl AgyHookResponse {
-    /// Allow the call, in every dialect, carrying any grant that goes with it.
-    fn allow(reason: &str, grants: Vec<String>) -> Self {
-        Self {
-            decision: "allow",
-            reason: Some(reason.to_string()),
-            allow_tool: Some(true),
-            deny_reason: None,
-            permission_overrides: grants,
-        }
-    }
-
-    /// Block the call, in both dialects.
+    /// Block the call. The reason reaches the model verbatim.
     fn deny(reason: &str) -> Self {
         Self {
             decision: "deny",
             reason: Some(reason.to_string()),
-            allow_tool: Some(false),
-            deny_reason: Some(reason.to_string()),
-            permission_overrides: Vec::new(),
         }
     }
 
-    /// Say nothing decisive and let Antigravity put the question to the user.
+    /// Put the question to the user in their own terminal.
     ///
-    /// `allow_tool` is left out on purpose: this is the one case where the two
-    /// interfaces cannot agree, since the older pair has no way to express
-    /// "ask" and `false` would mean deny. No grant either — granting is the
-    /// opposite of handing the decision back.
-    fn defer(decision: &'static str, reason: Option<String>) -> Self {
+    /// `force_ask` rather than `ask` because `ask` honours the allow list —
+    /// including the grants AgentToast writes to make Approve work, which would
+    /// turn every deferral into an approval.
+    fn force_ask(reason: Option<String>) -> Self {
         Self {
-            decision,
+            decision: "force_ask",
             reason,
-            allow_tool: None,
-            deny_reason: None,
-            permission_overrides: Vec::new(),
         }
     }
+}
+
+/// The buttons a permission toast carries.
+///
+/// `can_approve` is whether [`crate::agy_permissions::enabled`] holds — whether
+/// Antigravity has been granted the tools the hook matches, so that a hook
+/// saying nothing lets the call run. Without that, Approve cannot be honoured
+/// by anything, and offering it would be a lie; "Approve in session" is then
+/// the truthful version of the same button, and Deny works either way.
+pub fn actions(can_approve: bool) -> Vec<Action> {
+    let decide_elsewhere = Action {
+        action_type: ActionType::OpenSession,
+        label: if can_approve {
+            "Open session".into()
+        } else {
+            "Approve in session".into()
+        },
+    };
+
+    let mut actions = Vec::new();
+    if can_approve {
+        actions.push(Action {
+            action_type: ActionType::Approve,
+            label: "Approve".into(),
+        });
+    }
+    actions.push(Action {
+        action_type: ActionType::Deny,
+        label: "Deny".into(),
+    });
+    actions.push(decide_elsewhere);
+    actions
 }
 
 impl crate::AgentAdapter for AgyAdapter {
@@ -213,22 +270,13 @@ impl crate::AgentAdapter for AgyAdapter {
             Some(data.tool_call.name.clone()),
         );
 
-        // No Approve button, because there is nothing behind it. Antigravity
-        // hooks cannot grant permission — see the note on `AgyHookResponse` —
-        // so an Approve here would look like it answered the question and then
-        // leave the same prompt waiting in the terminal. Deny genuinely blocks
-        // the call; approving is something only the session can do, which is
-        // what the remaining button says.
-        event.actions = vec![
-            Action {
-                action_type: ActionType::Deny,
-                label: "Deny".into(),
-            },
-            Action {
-                action_type: ActionType::OpenSession,
-                label: "Approve in session".into(),
-            },
-        ];
+        // Approve is offered only when it can do something. An Antigravity hook
+        // cannot grant permission, so the button works by Antigravity having
+        // granted the call already and this hook then staying quiet — which is
+        // true only while AgentToast approval is switched on. With it off,
+        // approving would look like an answer and leave the same prompt waiting
+        // in the terminal, so the button that says so is the only one offered.
+        event.actions = actions(crate::agy_permissions::approves(&data.tool_call.name));
 
         if let Some(args) = &data.tool_call.args {
             event.context = Some(serde_json::to_string_pretty(args).unwrap_or_default());
@@ -258,60 +306,50 @@ impl crate::AgentAdapter for AgyAdapter {
 impl AgyAdapter {
     /// Format a user's answer for whichever hook asked the question.
     ///
-    /// `None` means write nothing. Antigravity reads an empty stdout as "this
-    /// hook has no opinion" and falls back to its own permission flow, which is
-    /// the only safe answer when there is nothing to say — and the only correct
-    /// one for `Stop`, where any `decision` other than `continue` is fine but
-    /// `continue` would refuse to let the agent stop.
+    /// `None` means write nothing, which Antigravity reads as "this hook has no
+    /// opinion" and resolves from its own permission lists. That is the whole of
+    /// how Approve works — see [`crate::agy_permissions`] — and it is also the
+    /// only correct answer for `Stop`, where any `decision` but `continue` is
+    /// harmless and `continue` would refuse to let the agent stop.
     pub fn format_for(
         &self,
         kind: AgyHookKind,
         action: ActionType,
         text: Option<&str>,
     ) -> Result<Option<String>> {
-        self.format_for_call(kind, action, text, Vec::new())
-    }
-
-    /// As [`Self::format_for`], but carrying the permission grants that let an
-    /// approved call actually run.
-    ///
-    /// Kept separate because the grants have to be derived from the tool call,
-    /// which the plain signature does not have.
-    pub fn format_for_call(
-        &self,
-        kind: AgyHookKind,
-        action: ActionType,
-        text: Option<&str>,
-        grants: Vec<String>,
-    ) -> Result<Option<String>> {
         if kind != AgyHookKind::PreToolUse {
             return Ok(None);
         }
 
         let response = match action {
-            ActionType::Approve | ActionType::Confirm => {
-                AgyHookResponse::allow("Approved by user via AgentToast", grants)
-            }
+            // Nothing to say. The grants AgentToast wrote are what let the call
+            // through; anything written here could only get in their way.
+            ActionType::Approve | ActionType::Confirm => return Ok(None),
             ActionType::Deny | ActionType::Reject => {
                 AgyHookResponse::deny("Denied by user via AgentToast")
             }
-            // The user went to the session to decide there. `force_ask` rather
-            // than `ask` because `ask` honours the "Always Allow" cache: with a
-            // cached grant the call would simply run, and they would arrive to
-            // find the decision already made for them.
-            ActionType::OpenSession => AgyHookResponse::defer(
-                "force_ask",
-                Some("User opted to decide in the session".to_string()),
-            ),
-            ActionType::SendText => AgyHookResponse::defer(
-                "force_ask",
-                text.map(|t| format!("User replied: {}", t)),
-            ),
+            ActionType::OpenSession => {
+                AgyHookResponse::force_ask(Some("User opted to decide in the session".to_string()))
+            }
+            ActionType::SendText => {
+                AgyHookResponse::force_ask(text.map(|t| format!("User replied: {}", t)))
+            }
         };
 
         serde_json::to_string(&response)
             .map(Some)
             .context("Failed to serialize Antigravity hook response")
+    }
+
+    /// What the bridge writes when it never got an answer.
+    ///
+    /// A stopped daemon, an unreachable pipe, a toast nobody clicked. Silence
+    /// would mean approval once the grants are in place, so the bridge says
+    /// `force_ask` and Antigravity asks in its own terminal, exactly as it would
+    /// if AgentToast were not installed.
+    pub fn unanswered(reason: &str) -> String {
+        serde_json::to_string(&AgyHookResponse::force_ask(Some(reason.to_string())))
+            .unwrap_or_else(|_| r#"{"decision":"force_ask"}"#.to_string())
     }
 
     /// Turn a `Stop` payload into a "finished" toast.
@@ -359,47 +397,6 @@ pub struct AgyStop {
     pub fully_idle: bool,
     #[serde(default)]
     pub workspace_paths: Vec<String>,
-}
-
-/// The permission grants that let this tool call run without a prompt.
-///
-/// Antigravity's own rule vocabulary, the same one used by `permissions.allow`
-/// in `settings.json` and named in its headless error message ("Add an
-/// allow-rule under permissions.allow (e.g. `command(<target>)`)"):
-///
-/// - `command(<command line>)` for shell calls. Matched as a prefix on word
-///   boundaries — the docs' example is that `git commit` matches
-///   `git commit -m "msg"` but not `git commit-next` — so passing the exact
-///   command line grants that call and no more.
-/// - `write_file(<path>)` for anything that writes. Applies to files and
-///   directories alike, recursively.
-///
-/// An unrecognised tool yields nothing rather than a guessed rule: a wrong
-/// grant would be a silent over-permission, and the worst case without one is
-/// the prompt the user already sees today.
-pub fn permission_grants(payload: &Value) -> Vec<String> {
-    let Some(call) = payload.get("toolCall") else {
-        return Vec::new();
-    };
-    let name = call.get("name").and_then(|n| n.as_str()).unwrap_or_default();
-    let arg = |key: &str| {
-        call.get("args")
-            .and_then(|a| a.get(key))
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-    };
-
-    let grant = match name {
-        "run_command" => arg("CommandLine").map(|c| format!("command({})", c)),
-        "write_to_file" | "create_file" | "replace_file_content" | "edit_notebook"
-        | "delete_file" => arg("TargetFile")
-            .or_else(|| arg("AbsolutePath"))
-            .map(|p| format!("write_file({})", p)),
-        _ => None,
-    };
-
-    grant.into_iter().collect()
 }
 
 /// Where the session is running.
@@ -578,23 +575,35 @@ mod tests {
     /// a lie: it would answer the toast and leave the same prompt waiting in the
     /// terminal. Deny is real, and approving is the session's job.
     #[test]
-    fn there_is_no_approve_button() {
-        let event = AgyAdapter.parse_hook_payload(&run_command_payload()).unwrap();
-        let kinds: Vec<_> = event.actions.iter().map(|a| a.action_type.clone()).collect();
+    fn the_buttons_match_what_antigravity_will_honour() {
+        // Approval on: a hook that says nothing lets the call run, so Approve
+        // is real and the third button is only a way to go and look.
+        let on: Vec<_> = actions(true).iter().map(|a| a.action_type.clone()).collect();
+        assert_eq!(
+            on,
+            vec![
+                ActionType::Approve,
+                ActionType::Deny,
+                ActionType::OpenSession
+            ]
+        );
 
+        // Approval off: nothing would honour an Approve, so it is not offered,
+        // and the remaining button says where approving actually happens.
+        let off = actions(false);
+        let kinds: Vec<_> = off.iter().map(|a| a.action_type.clone()).collect();
         assert!(
             !kinds.contains(&ActionType::Approve) && !kinds.contains(&ActionType::Confirm),
-            "an Antigravity toast must not offer an approval it cannot deliver"
+            "a toast must not offer an approval nothing will honour"
         );
         assert_eq!(kinds, vec![ActionType::Deny, ActionType::OpenSession]);
-
-        // The remaining button has to say how approving actually happens.
-        let open = event
-            .actions
-            .iter()
-            .find(|a| a.action_type == ActionType::OpenSession)
-            .unwrap();
-        assert_eq!(open.label, "Approve in session");
+        assert_eq!(
+            off.iter()
+                .find(|a| a.action_type == ActionType::OpenSession)
+                .unwrap()
+                .label,
+            "Approve in session"
+        );
     }
 
     /// `workspacePaths` is empty when the CLI runs outside a workspace, which
@@ -669,130 +678,73 @@ mod tests {
             .map(|raw| serde_json::from_str(&raw).unwrap())
     }
 
-    /// The decision is top level here, not nested inside `hookSpecificOutput`
-    /// the way Claude Code wants it. Emitting Claude's shape would leave the
-    /// hook with no effect at all.
+    /// Approve is silence. Antigravity gives a hook no way to grant a call —
+    /// `decision: "allow"`, `allowTool: true` and `permissionOverrides` were
+    /// each sent to a live session, parsed without complaint, and ignored — so
+    /// approval is carried by the grants in `agy_permissions`, and this hook's
+    /// job is to stay out of their way. Writing `allow` would be harmless but
+    /// dishonest; writing anything else would block the call.
     #[test]
-    fn approve_allows_at_the_top_level() {
-        let out = decision(ActionType::Approve).expect("approve must answer");
-        assert_eq!(out["decision"], "allow");
+    fn approve_says_nothing() {
+        assert!(
+            decision(ActionType::Approve).is_none(),
+            "approve must write nothing, so Antigravity resolves it from its own permissions"
+        );
+        assert!(decision(ActionType::Confirm).is_none());
+    }
+
+    /// The decision goes at the top level, not nested inside
+    /// `hookSpecificOutput` the way Claude Code wants it. Emitting Claude's
+    /// shape would leave the hook with no effect at all.
+    #[test]
+    fn a_decision_sits_at_the_top_level() {
+        let out = decision(ActionType::Deny).expect("deny must answer");
+        assert!(out.get("decision").is_some());
         assert!(
             out.get("hookSpecificOutput").is_none(),
             "Claude Code's shape must not leak into an Antigravity response"
         );
     }
 
-    /// `PreToolHookResult` carries two interfaces at once, so the older
-    /// verdict goes out alongside the newer one.
-    #[test]
-    fn approve_also_answers_the_older_interface() {
-        let out = decision(ActionType::Approve).unwrap();
-        assert_eq!(out["allowTool"], true);
-    }
-
-    /// The result is unmarshalled with protojson, which accepts both a field's
-    /// proto name and its `json_name` — and rejects a message carrying both:
+    /// The result is unmarshalled with protojson, which accepts either a
+    /// field's proto name or its `json_name` — and rejects a message carrying
+    /// both:
     ///
     /// ```text
     /// failed to unmarshal result ... via protojson:
     /// duplicate field "permissionOverrides"
     /// ```
     ///
-    /// A result that will not parse fails the tool call, so hedging the
-    /// spelling is worse than picking one. Every key must appear exactly once.
+    /// A result that will not parse fails the tool call, so hedging a spelling
+    /// is worse than picking one. Nothing hedges any more; this keeps it so.
     #[test]
     fn no_field_is_sent_under_two_spellings() {
-        let raw = AgyAdapter
-            .format_for_call(
-                AgyHookKind::PreToolUse,
-                ActionType::Approve,
-                None,
-                vec!["command(echo hi)".to_string()],
-            )
-            .unwrap()
-            .unwrap();
-        let out: Value = serde_json::from_str(&raw).unwrap();
-
-        for (camel, snake) in [
-            ("permissionOverrides", "permission_overrides"),
-            ("allowTool", "allow_tool"),
-            ("denyReason", "deny_reason"),
-        ] {
-            assert!(
-                !(out.get(camel).is_some() && out.get(snake).is_some()),
-                "{camel} and {snake} are one protojson field; sending both fails the parse"
-            );
-        }
-    }
-
-    /// The binary defines `hook_deny` and `hook_force_ask` but no `hook_allow`:
-    /// a hook cannot grant a call, only block or escalate it. Approval has to
-    /// travel as a permission grant, under both spellings of the field.
-    #[test]
-    fn approve_grants_permission_for_the_call() {
-        let grants = permission_grants(&run_command_payload());
-        assert_eq!(grants, vec!["command(echo hookprobe)".to_string()]);
-
-        let raw = AgyAdapter
-            .format_for_call(AgyHookKind::PreToolUse, ActionType::Approve, None, grants)
-            .unwrap()
-            .expect("approve must answer");
-        let out: Value = serde_json::from_str(&raw).unwrap();
-
-        assert_eq!(out["permissionOverrides"][0], "command(echo hookprobe)");
-    }
-
-    /// A write is granted by path, not by command. `write_file` covers files
-    /// and directories alike.
-    #[test]
-    fn writes_are_granted_by_path() {
-        let payload = json!({
-            "conversationId": "c1",
-            "toolCall": {
-                "name": "write_to_file",
-                "args": { "TargetFile": "C:/Users/x/toast-test/hello.py" }
-            }
-        });
-
-        assert_eq!(
-            permission_grants(&payload),
-            vec!["write_file(C:/Users/x/toast-test/hello.py)".to_string()]
-        );
-    }
-
-    /// A guessed rule would be a silent over-permission; the cost of none is
-    /// only the prompt the user already gets.
-    #[test]
-    fn an_unknown_tool_grants_nothing() {
-        let payload = json!({
-            "conversationId": "c1",
-            "toolCall": { "name": "browser_click_element", "args": { "Index": 3 } }
-        });
-        assert!(permission_grants(&payload).is_empty());
-    }
-
-    /// Denying and deferring must never hand out a grant.
-    #[test]
-    fn only_approval_grants() {
-        let grants = permission_grants(&run_command_payload());
-
         for action in [ActionType::Deny, ActionType::OpenSession, ActionType::SendText] {
-            let raw = AgyAdapter
-                .format_for_call(
-                    AgyHookKind::PreToolUse,
-                    action.clone(),
-                    None,
-                    grants.clone(),
-                )
-                .unwrap()
-                .expect("must answer");
-            let out: Value = serde_json::from_str(&raw).unwrap();
-            assert!(
-                out.get("permissionOverrides").is_none(),
-                "{:?} must not grant permission",
-                action
-            );
+            let out = decision(action.clone()).expect("must answer");
+            let keys: Vec<&str> = out.as_object().unwrap().keys().map(String::as_str).collect();
+
+            for (camel, snake) in [
+                ("permissionOverrides", "permission_overrides"),
+                ("allowTool", "allow_tool"),
+                ("denyReason", "deny_reason"),
+            ] {
+                assert!(
+                    !(keys.contains(&camel) && keys.contains(&snake)),
+                    "{camel} and {snake} are one protojson field; sending both fails the parse"
+                );
+            }
         }
+    }
+
+    /// Nothing but `decision` and `reason` is sent. The other fields of
+    /// `PreToolHookResult` were each tested and found to change nothing, and an
+    /// unused field is one more way to trip the parser that gates every call.
+    #[test]
+    fn only_the_two_fields_that_do_something_are_sent() {
+        let out = decision(ActionType::Deny).unwrap();
+        let mut keys: Vec<&str> = out.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["decision", "reason"]);
     }
 
     #[test]
@@ -800,8 +752,6 @@ mod tests {
         let out = decision(ActionType::Deny).expect("deny must answer");
         assert_eq!(out["decision"], "deny");
         assert!(out["reason"].as_str().unwrap().contains("AgentToast"));
-        assert_eq!(out["allowTool"], false);
-        assert!(out["denyReason"].as_str().unwrap().contains("AgentToast"));
     }
 
     /// `ask` honours the "Always Allow" cache, so a user who chose to decide in
@@ -818,19 +768,31 @@ mod tests {
         );
     }
 
-    /// The older interface has no way to say "ask", and `false` there means
-    /// deny — so handing the decision back must leave the field out entirely
-    /// rather than answering on the user's behalf.
+    /// `ask` would be worse than useless here: it honours the allow list, and
+    /// the allow list is exactly what AgentToast writes to make Approve work —
+    /// so deferring with `ask` would approve every call it meant to hand back.
+    /// Only `force_ask` overrides a grant.
     #[test]
-    fn deferring_omits_the_older_verdict() {
+    fn deferring_overrides_the_grant_rather_than_honouring_it() {
         for action in [ActionType::OpenSession, ActionType::SendText] {
             let out = decision(action.clone()).unwrap();
-            assert!(
-                out.get("allowTool").is_none(),
-                "{:?} must not emit a verdict in the older interface",
+            assert_eq!(
+                out["decision"], "force_ask",
+                "{:?} must override the allow list, not defer to it",
                 action
             );
         }
+    }
+
+    /// What the bridge writes when it never got an answer from the user.
+    /// Antigravity ignores a hook that fails, and ignoring this one means
+    /// approving the call, so failure has to be spelled out.
+    #[test]
+    fn an_unanswered_call_is_handed_back_not_approved() {
+        let out: Value = serde_json::from_str(&AgyAdapter::unanswered("daemon is not running"))
+            .expect("must be valid JSON, since unparseable output is ignored");
+        assert_eq!(out["decision"], "force_ask");
+        assert!(out["reason"].as_str().unwrap().contains("daemon"));
     }
 
     /// Antigravity validates this field and rejects anything else outright.
@@ -846,7 +808,10 @@ mod tests {
             ActionType::SendText,
             ActionType::OpenSession,
         ] {
-            let out = decision(action.clone()).expect("every action must answer");
+            // Approve answers with silence, which is itself a valid answer.
+            let Some(out) = decision(action.clone()) else {
+                continue;
+            };
             let value = out["decision"].as_str().unwrap().to_string();
             assert!(
                 ACCEPTED.contains(&value.as_str()),

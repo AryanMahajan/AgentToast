@@ -3,51 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AgentToast — Sessions</title>
-    <!-- styles.css carries the shared design tokens; dashboard.css layers the
-         window chrome on top and undoes the toast's transparent ground. -->
-    <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="dashboard.css">
+    <title>AgentToast</title>
 </head>
-<body class="dashboard">
-    <header class="dash-header">
-        <div class="dash-titles">
-            <div class="dash-eyebrow">agenttoast</div>
-            <h1 class="dash-title">Active sessions</h1>
-        </div>
-        <div class="dash-count" id="count">0</div>
-    </header>
-
-    <section class="setup" id="setup">
-        <div class="setup-head">
-            <h2 class="setup-title">Claude Code</h2>
-            <span class="setup-note" id="setup-note"></span>
-        </div>
-        <div class="setup-rows" id="setup-rows"></div>
-        <p class="setup-hint">
-            Connecting adds AgentToast to Claude Code&rsquo;s settings and backs the file up
-            first. Anything already configured there is left alone.
-        </p>
-    </section>
-
-    <section class="setup" id="setup-agy">
-        <div class="setup-head">
-            <h2 class="setup-title">Antigravity</h2>
-            <span class="setup-note" id="agy-note"></span>
-        </div>
-        <div class="setup-rows" id="agy-rows"></div>
-        <p class="setup-hint">
-            Antigravity keeps its hooks in one file for the whole machine, so there is
-            nothing to set up per project. Other tools&rsquo; hooks in that file are left alone.
-            It reads them when a session starts, so a session already open when you connect
-            keeps asking in the terminal until you restart it.
-        </p>
-    </section>
-
-    <main class="dash-list" id="list">
-        <p class="dash-empty" id="empty">No active sessions.</p>
-    </main>
-
-    <script src="dashboard.js"></script>
+<body>
+    <div id="root"></div>
+    <script type="module" src="./dashboard/main.tsx"></script>
 </body>
 </html>

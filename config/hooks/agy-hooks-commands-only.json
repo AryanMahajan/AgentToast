@@ -1,0 +1,23 @@
+{
+  "agenttoast": {
+    "PreToolUse": [
+      {
+        "matcher": "^run_command$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agenttoast-bridge-agy",
+            "timeout": 660
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "agenttoast-bridge-agy",
+        "timeout": 660
+      }
+    ]
+  }
+}

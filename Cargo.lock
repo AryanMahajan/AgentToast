@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agenttoast"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "agenttoast-adapters",
  "agenttoast-core",
@@ -34,10 +34,11 @@ dependencies = [
 
 [[package]]
 name = "agenttoast-adapters"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "agenttoast-core",
  "anyhow",
+ "dirs",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -46,7 +47,7 @@ dependencies = [
 
 [[package]]
 name = "agenttoast-bridge-agy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "agenttoast-adapters",
  "agenttoast-core",
@@ -62,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "agenttoast-bridge-claude"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "agenttoast-adapters",
  "agenttoast-core",
@@ -78,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "agenttoast-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -93,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "agenttoast-ipc"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "agenttoast-core",
  "anyhow",

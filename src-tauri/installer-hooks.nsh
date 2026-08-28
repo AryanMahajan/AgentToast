@@ -15,6 +15,8 @@
   Pop $0
   nsExec::Exec 'taskkill /F /IM agenttoast-bridge-claude.exe'
   Pop $0
+  nsExec::Exec 'taskkill /F /IM agenttoast-bridge-agy.exe'
+  Pop $0
   ; Windows releases the file lock a moment after the process ends.
   Sleep 1200
 !macroend
@@ -24,6 +26,8 @@
   nsExec::Exec 'taskkill /F /T /IM agenttoast.exe'
   Pop $0
   nsExec::Exec 'taskkill /F /IM agenttoast-bridge-claude.exe'
+  Pop $0
+  nsExec::Exec 'taskkill /F /IM agenttoast-bridge-agy.exe'
   Pop $0
   Sleep 1200
 !macroend

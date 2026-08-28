@@ -1,0 +1,73 @@
+/* AgentToast design tokens.
+   Shared by both windows: the toast styles them directly, and the
+   dashboard re-exports them to Tailwind through `@theme inline`, so a
+   colour changed here changes in both places and nowhere else. */
+
+/* Light tokens. Every colour is defined here so the dark block below only has
+   to redefine, never introduce. Hex fallbacks precede each oklch value for
+   WebView2 builds that predate oklch support. */
+:root {
+    --surface: #fcfcfd;
+    --border: rgba(0, 0, 0, 0.09);
+    --border-strong: rgba(0, 0, 0, 0.22);
+    --fg: #16171a;
+    --fg2: #565a61;
+    --fg3: #8a8e96;
+    --fill: rgba(0, 0, 0, 0.045);
+    --fill-hover: rgba(0, 0, 0, 0.085);
+    --input: #ffffff;
+    --track: rgba(0, 0, 0, 0.1);
+    --avatar: #ffffff;
+    --dot-ring: #fafafc;
+    --shadow: 0 14px 34px rgba(20, 22, 28, 0.18), 0 2px 6px rgba(20, 22, 28, 0.1);
+
+    --accent: #4c5fd7;
+    --accent: oklch(0.55 0.16 264);
+    --accent-on: #ffffff;
+    --ok: #1f8a5f;
+    --ok: oklch(0.55 0.13 158);
+    --warn: #9a6f14;
+    --warn: oklch(0.6 0.13 72);
+    --err: #c33a2e;
+    --err: oklch(0.55 0.18 25);
+
+    /* Geometry — kept in sync with the PAD_* / CARD_W constants in
+       src-tauri/src/window.rs, which size and anchor the window. */
+    --card-w: 372px;
+    --pad-l: 26px;
+    --pad-r: 44px;
+    --pad-t: 30px;
+    --pad-b: 30px;
+
+    --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+    --font-small: 'Segoe UI Variable Small', 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --surface: #2a2b31;
+        --border: rgba(255, 255, 255, 0.1);
+        --border-strong: rgba(255, 255, 255, 0.28);
+        --fg: #f3f4f6;
+        --fg2: #a9adb6;
+        --fg3: #7b8089;
+        --fill: rgba(255, 255, 255, 0.07);
+        --fill-hover: rgba(255, 255, 255, 0.12);
+        --input: rgba(0, 0, 0, 0.3);
+        --track: rgba(255, 255, 255, 0.12);
+        --avatar: rgba(255, 255, 255, 0.08);
+        --dot-ring: #2a2b31;
+        --shadow: 0 18px 44px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+
+        --accent: #8098f8;
+        --accent: oklch(0.7 0.15 264);
+        --accent-on: #141519;
+        --ok: #4ecb8f;
+        --ok: oklch(0.75 0.14 158);
+        --warn: #e0a83c;
+        --warn: oklch(0.8 0.13 80);
+        --err: #f2705f;
+        --err: oklch(0.68 0.17 25);
+    }
+}

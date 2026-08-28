@@ -1,6 +1,7 @@
 //! Tauri commands — invokable from the frontend JavaScript.
 
 use crate::AppState;
+use agenttoast_adapters::agy::Watch;
 use agenttoast_core::event::{ActionType, AttentionEvent, UserResponse};
 use agenttoast_core::session::Session;
 use std::sync::Arc;
@@ -289,25 +290,139 @@ pub fn agy_hook_status(app: tauri::AppHandle) -> crate::hooks::HookStatus {
 }
 
 /// Add AgentToast's hooks to Antigravity's `hooks.json`.
+///
+/// `watch_file_edits` decides the matcher. Antigravity gates file writes through
+/// its *execution mode* rather than its permission lists, and a hook cannot see
+/// the mode — so an `accept-edits` session, which was chosen precisely to stop
+/// pausing on edits, needs a way to say "commands only". See
+/// `agenttoast_adapters::agy::Watch`.
 #[tauri::command]
-pub fn connect_agy_hooks(app: tauri::AppHandle) -> Result<crate::hooks::HookStatus, String> {
+pub fn connect_agy_hooks(
+    app: tauri::AppHandle,
+    watch_file_edits: bool,
+) -> Result<crate::hooks::HookStatus, String> {
     let bridge = crate::install::agy_bridge_path(&app).ok_or_else(|| {
         "Could not find the AgentToast bridge for Antigravity. If this is a \
          development build, run `cargo build --workspace` first."
             .to_string()
     })?;
 
-    let status = crate::agy_hooks::connect(&bridge)?;
+    let watch = if watch_file_edits {
+        Watch::CommandsAndEdits
+    } else {
+        Watch::CommandsOnly
+    };
+    let status = crate::agy_hooks::connect(&bridge, watch)?;
 
-    tracing::info!(path = %status.path, bridge = %bridge.display(), "Connected Antigravity");
+    // The grants have to follow the matcher. Narrowing the scope while
+    // `write_file(*)` stayed behind would leave Antigravity granted for edits
+    // that nothing is watching any more.
+    if agenttoast_adapters::agy_permissions::enabled_for(Watch::CommandsOnly) {
+        if let Err(e) = agenttoast_adapters::agy_permissions::enable(watch) {
+            tracing::warn!(error = %e, "Could not realign Antigravity approval grants");
+        }
+    }
+
+    tracing::info!(
+        path = %status.path,
+        bridge = %bridge.display(),
+        ?watch,
+        "Connected Antigravity"
+    );
     Ok(status)
 }
 
 /// Remove AgentToast's hooks, leaving every other named hook untouched.
+///
+/// Also gives back the approval grants. They are only safe while the bridge is
+/// there to answer for them: on their own they are a standing instruction to
+/// Antigravity to stop asking, which is the last thing a disconnected AgentToast
+/// should leave behind.
 #[tauri::command]
 pub fn disconnect_agy_hooks() -> Result<crate::hooks::HookStatus, String> {
+    if let Err(e) = agenttoast_adapters::agy_permissions::disable() {
+        tracing::warn!(error = %e, "Could not withdraw Antigravity approval grants");
+    }
+
     let status = crate::agy_hooks::disconnect()?;
 
     tracing::info!(path = %status.path, "Disconnected Antigravity");
     Ok(status)
+}
+
+/// What Approve can currently do on an Antigravity toast.
+#[derive(serde::Serialize)]
+pub struct AgyApprovalStatus {
+    /// Which calls the configured matcher raises a toast for.
+    pub watches_file_edits: bool,
+    /// Antigravity's startup execution mode, if it is written down. Advisory:
+    /// `--mode` and Shift+Tab change the live mode without recording it.
+    pub agent_mode: Option<String>,
+    /// Whether every grant is in place. Approve is offered only when it is.
+    pub enabled: bool,
+    /// `~/.gemini/antigravity-cli/settings.json`, for the dashboard to name.
+    pub path: String,
+    /// The rules that get written, so the user can see the size of it.
+    pub grants: Vec<String>,
+    /// Rules of the user's own that would beat ours. Antigravity resolves
+    /// deny > ask > allow, so an existing `ask(command(*))` keeps prompting no
+    /// matter what we write, and the user deserves to be told rather than left
+    /// wondering why Approve does nothing.
+    pub shadowed_by: Vec<String>,
+}
+
+fn approval_status() -> AgyApprovalStatus {
+    use agenttoast_adapters::agy_permissions as perms;
+
+    // Read the scope off the hooks file rather than storing it twice. The
+    // matcher Antigravity will actually run is the only thing that decides which
+    // calls raise a toast, so it is the honest source for the answer.
+    let watch = crate::agy_hooks::configured_watch();
+
+    AgyApprovalStatus {
+        watches_file_edits: watch.watches_edits(),
+        agent_mode: perms::agent_mode(),
+        enabled: perms::enabled_for(watch),
+        path: perms::settings_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unknown>".into()),
+        grants: perms::grants_for(watch)
+            .iter()
+            .map(|g| g.to_string())
+            .collect(),
+        shadowed_by: perms::shadowing().unwrap_or_default(),
+    }
+}
+
+/// Read the approval state without changing anything.
+#[tauri::command]
+pub fn agy_approval_status() -> AgyApprovalStatus {
+    approval_status()
+}
+
+/// Let AgentToast answer Antigravity's permission questions.
+///
+/// Writes the allow-rules that make a silent hook mean "yes". Nothing here
+/// touches Antigravity's `deny` or `ask` lists, and an existing rule of the
+/// user's is left in place and reported back rather than overwritten.
+#[tauri::command]
+pub fn enable_agy_approval() -> Result<AgyApprovalStatus, String> {
+    let watch = crate::agy_hooks::configured_watch();
+    let shadowed =
+        agenttoast_adapters::agy_permissions::enable(watch).map_err(|e| e.to_string())?;
+
+    if !shadowed.is_empty() {
+        tracing::warn!(rules = ?shadowed, "Antigravity rules take precedence over the grants");
+    }
+    tracing::info!(?watch, "Antigravity approval enabled");
+    Ok(approval_status())
+}
+
+/// Take the grants back, returning Antigravity to asking for itself.
+#[tauri::command]
+pub fn disable_agy_approval() -> Result<AgyApprovalStatus, String> {
+    agenttoast_adapters::agy_permissions::disable().map_err(|e| e.to_string())?;
+
+    tracing::info!("Antigravity approval disabled");
+    Ok(approval_status())
 }

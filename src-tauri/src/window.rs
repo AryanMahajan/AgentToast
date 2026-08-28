@@ -358,8 +358,12 @@ pub fn show_dashboard(app: &AppHandle) {
         DASHBOARD_LABEL,
         WebviewUrl::App("dashboard.html".into()),
     )
-    .title("AgentToast — Sessions")
-    .inner_size(600.0, 540.0)
+    // Not "Sessions" any more: the window has tabs, and the title bar is the
+    // one label that cannot follow the one you are on.
+    .title("AgentToast")
+    // Tall enough that the Connectors tab shows both agents without scrolling,
+    // which is where a first run lands.
+    .inner_size(620.0, 640.0)
     .min_inner_size(420.0, 320.0)
     .resizable(true)
     .build()

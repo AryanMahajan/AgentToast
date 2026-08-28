@@ -13,7 +13,7 @@
 //! path into somebody's repository is not a favour.
 
 use crate::hooks::HookStatus;
-use agenttoast_adapters::agy::DEFAULT_MATCHER;
+use agenttoast_adapters::agy::Watch;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -83,8 +83,32 @@ pub fn status(current_bridge: Option<&Path>) -> HookStatus {
     }
 }
 
+/// The watch scope the file is currently set up for.
+///
+/// Read back from the matcher rather than stored separately: the matcher is what
+/// Antigravity actually runs, so it is the only answer that cannot drift. A file
+/// with no hook of ours falls back to the wider scope, which is what a fresh
+/// Connect should write.
+pub fn configured_watch() -> Watch {
+    hooks_path()
+        .and_then(|path| read_hooks(&path))
+        .and_then(|hooks| our_matcher(&hooks))
+        .map(|matcher| Watch::from_matcher(&matcher))
+        .unwrap_or(Watch::CommandsAndEdits)
+}
+
+/// The `PreToolUse` matcher on our own hook, if it is there.
+fn our_matcher(hooks: &Map<String, Value>) -> Option<String> {
+    hooks
+        .get(HOOK_NAME)?
+        .get("PreToolUse")?
+        .as_array()?
+        .iter()
+        .find_map(|group| group.get("matcher")?.as_str().map(str::to_string))
+}
+
 /// Add AgentToast's hooks, preserving every other named hook in the file.
-pub fn connect(bridge: &Path) -> Result<HookStatus, String> {
+pub fn connect(bridge: &Path, watch: Watch) -> Result<HookStatus, String> {
     let path = hooks_path()
         .ok_or_else(|| "Could not work out where Antigravity keeps its hooks".to_string())?;
 
@@ -98,7 +122,7 @@ pub fn connect(bridge: &Path) -> Result<HookStatus, String> {
     let command = command_string(bridge)?;
     let mut hooks = read_hooks(&path).unwrap_or_default();
 
-    hooks.insert(HOOK_NAME.to_string(), our_hook(&command));
+    hooks.insert(HOOK_NAME.to_string(), our_hook(&command, watch));
 
     write_hooks(&path, &hooks)?;
     Ok(status(Some(bridge)))
@@ -169,11 +193,11 @@ fn write_hooks(path: &Path, hooks: &Map<String, Value>) -> Result<(), String> {
 /// The two events are shaped differently, which is easy to get wrong:
 /// `PreToolUse` is *grouped*, wrapping its handlers in a `matcher` plus a
 /// `hooks` array, while `Stop` is *flat* — handler objects directly, no matcher.
-fn our_hook(command: &str) -> Value {
+fn our_hook(command: &str, watch: Watch) -> Value {
     json!({
         "PreToolUse": [
             {
-                "matcher": DEFAULT_MATCHER,
+                "matcher": watch.matcher(),
                 "hooks": [ handler(command) ]
             }
         ],
@@ -272,7 +296,7 @@ mod tests {
 
     fn connected_file(command: &str) -> Map<String, Value> {
         let mut hooks = Map::new();
-        hooks.insert(HOOK_NAME.to_string(), our_hook(command));
+        hooks.insert(HOOK_NAME.to_string(), our_hook(command, Watch::CommandsAndEdits));
         hooks
     }
 
@@ -280,10 +304,10 @@ mod tests {
     /// Getting this the wrong way round makes Antigravity ignore the hook.
     #[test]
     fn pre_tool_use_is_grouped_and_stop_is_flat() {
-        let hook = our_hook(r"C:\Apps\AgentToast\agenttoast-bridge-agy.exe");
+        let hook = our_hook(r"C:\Apps\AgentToast\agenttoast-bridge-agy.exe", Watch::CommandsAndEdits);
 
         let group = &hook["PreToolUse"][0];
-        assert_eq!(group["matcher"], DEFAULT_MATCHER);
+        assert_eq!(group["matcher"], Watch::CommandsAndEdits.matcher());
         assert_eq!(group["hooks"][0]["type"], "command");
 
         let stop = &hook["Stop"][0];
@@ -303,7 +327,7 @@ mod tests {
     /// prompt.
     #[test]
     fn the_hook_outlasts_the_bridges_own_wait() {
-        let hook = our_hook("bridge.exe");
+        let hook = our_hook("bridge.exe", Watch::CommandsAndEdits);
         let timeout = hook["PreToolUse"][0]["hooks"][0]["timeout"]
             .as_u64()
             .unwrap();
@@ -340,7 +364,7 @@ mod tests {
         // ...and adding ours leaves theirs in place.
         hooks.insert(
             HOOK_NAME.into(),
-            our_hook("bridge/agenttoast-bridge-agy.exe"),
+            our_hook("bridge/agenttoast-bridge-agy.exe", Watch::CommandsAndEdits),
         );
         assert!(hooks.contains_key("lint-checker"));
         assert!(find_bridge_command(&hooks).is_some());
@@ -348,6 +372,30 @@ mod tests {
         hooks.remove(HOOK_NAME);
         assert!(hooks.contains_key("lint-checker"));
         assert!(find_bridge_command(&hooks).is_none());
+    }
+
+    /// A commands-only session must write a matcher that raises nothing for a
+    /// file edit — that is the entire mechanism by which AgentToast stays out of
+    /// an `accept-edits` session's way, since the mode itself is invisible here.
+    #[test]
+    fn commands_only_watches_no_file_tools() {
+        let hook = our_hook("bridge.exe", Watch::CommandsOnly);
+        let matcher = hook["PreToolUse"][0]["matcher"].as_str().unwrap();
+
+        assert!(matcher.contains("run_command"));
+        for tool in [
+            "write_to_file",
+            "create_file",
+            "replace_file_content",
+            "edit_notebook",
+            "delete_file",
+        ] {
+            assert!(!matcher.contains(tool), "{tool} must not raise a toast");
+        }
+
+        // And the scope survives the round trip through the file, because that
+        // matcher is where the setting is actually stored.
+        assert_eq!(Watch::from_matcher(matcher), Watch::CommandsOnly);
     }
 
     /// Antigravity runs hooks through `cmd`, which reads a leading `/` as a

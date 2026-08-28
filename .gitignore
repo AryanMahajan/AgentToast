@@ -1,6 +1,9 @@
 # Rust build output
 target/
 
+# Front-end build output
+dist/
+
 # IDE
 .idea/
 .vscode/

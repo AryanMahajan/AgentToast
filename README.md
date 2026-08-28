@@ -56,10 +56,29 @@ run_command  write_to_file  create_file  replace_file_content  edit_notebook  de
 
 Reading a file, listing a directory or searching the codebase raises nothing.
 
-**And Antigravity always asks you as well.** Its hooks can deny a call or force a
-prompt, but there is no way for one to *grant* permission — so a toast there is a
-heads-up and a kill switch rather than a replacement for its prompt. Deny stops
-the call outright; Approve lets it go on to Antigravity's own confirmation.
+**Antigravity has two gates, and they are not the same gate.** Shell commands go
+through its permission rules in every execution mode. File edits go through the
+mode itself: `default` pauses for a line-level diff review, `accept-edits` does
+not pause at all, `plan` mostly stays read-only. A hook is told neither which
+mode is running nor whether the call would have prompted — so **Raise a toast
+for** in the Antigravity panel lets you say. *Commands and file edits* suits
+`default`; *Commands only* suits `accept-edits`, where a toast per edit would put
+back exactly the interruption that mode exists to remove.
+
+**Approve works differently for Antigravity, and you have to turn it on.** An
+Antigravity hook can block a call or force a prompt, but nothing it returns can
+*grant* one — so out of the box a toast there is a heads-up and a kill switch,
+and approving means going to the terminal. Switching on **Approve from the toast**
+in the dashboard grants Antigravity the tools AgentToast already watches, which
+leaves the toast as the only thing that gets asked. Deny still blocks the call,
+and anything AgentToast cannot answer goes back to Antigravity's own prompt.
+
+The catch is worth stating plainly: with that switch on, Antigravity no longer
+asks for itself, and it treats a hook that fails or is missing as consent. If
+AgentToast is running, the toast is the gate. If it has been uninstalled or its
+bridge deleted without pressing Disconnect, nothing is. Disconnect gives the
+grants back, and AgentToast withdraws them on start if it finds them with no
+hook behind them.
 
 ## How it works
 
@@ -99,7 +118,7 @@ Antigravity hooks:
 
 | Hook | Raises |
 | :--- | :--- |
-| `PreToolUse` | the toast, for matching tools only — Deny blocks the call, Approve hands it back to Antigravity's own prompt |
+| `PreToolUse` | the toast, for matching tools only — Deny blocks the call; Approve needs the dashboard switch, without which it hands back to Antigravity's own prompt |
 | `Stop` | the auto-dismissing "finished" toast |
 
 Antigravity has no session lifecycle hooks, so its sessions appear in the
@@ -185,12 +204,18 @@ to other tools — which Antigravity files under their own names — are left al
 
 To wire it up by hand instead, copy `config/hooks/agy-hooks.json` into
 `~/.gemini/config/hooks.json` and replace `agenttoast-bridge-agy` with the full
-path to the installed bridge.
+path to the installed bridge. For a working Approve button, merge
+`config/hooks/agy-settings-permissions.json` into
+`~/.gemini/antigravity-cli/settings.json` as well — that is exactly what the
+dashboard switch writes.
 
-**Disconnect before uninstalling.** This matters more here than it does for Claude
-Code: a `PreToolUse` hook that fails does not degrade to "carry on without it", it
-fails the tool call. A hook pointing at a deleted bridge stops the agent doing
-anything at all.
+**Disconnect before uninstalling, if you turned Approve on.** Antigravity treats a
+hook that fails, or that points at a binary no longer there, as a hook with no
+opinion — it does not fail the tool call, it lets it through. That is forgiving
+right up until the grants are in place, at which point a missing bridge means
+every call sails past unasked. Disconnect gives the grants back. AgentToast also
+withdraws them on start if it finds them with no hook behind them, but it cannot
+do that once it has been uninstalled.
 
 ## Using it
 
@@ -242,23 +267,44 @@ what that means.
 
 ## Building
 
-Needs [Rust](https://rustup.rs/) and the MSVC build tools.
+Needs [Rust](https://rustup.rs/) with the MSVC build tools, and
+[Node](https://nodejs.org/) 20 or newer for the front end.
 
 ```bash
 git clone https://github.com/AryanMahajan/claude_notifier
 cd claude_notifier
+npm install
 
-# Run it
-cargo run -p agenttoast
+# Run it — Vite serves the windows with hot reload
+cargo tauri dev
 
 # Tests
-cargo test --workspace
+cargo test --workspace   # Rust
+npm run typecheck        # TypeScript
 
 # Build the installer
 cargo tauri build --config src-tauri/tauri.bundle.conf.json
 ```
 
 The installer lands in `target/release/bundle/nsis/`.
+
+**The front end is built by Vite, into `dist/`.** `cargo tauri build` runs
+`npm run build` for you, so a checkout only needs `npm install` once. There are
+two entry points, one per window:
+
+| Window | Entry | Stack |
+| :--- | :--- | :--- |
+| Dashboard | `ui/dashboard.html` → `ui/dashboard/` | React + TypeScript + Tailwind |
+| Toast | `ui/index.html` → `ui/toast.js` | Plain TypeScript-free JS and CSS |
+
+The toast stays framework-free on purpose. It opens on the critical path of an
+agent waiting for an answer, and the tray app pre-warms a hidden copy at startup
+to hide WebView2's cold start — a framework there would cost first paint and buy
+nothing. `ui/tokens.css` holds the palette both windows share; the dashboard
+re-exports it to Tailwind with `@theme inline`, so a colour is written once.
+
+Running `cargo run -p agenttoast` directly works too, but it serves whatever is
+already in `dist/` — run `npm run build` first if the front end has changed.
 
 **That `--config` flag is required.** The bridges are separate binaries that have
 to be bundled alongside the app, and Tauri checks resource paths at compile time —
@@ -273,13 +319,22 @@ Working and in daily use, but early. Known gaps:
 - **Open Session** raises the right terminal window when it can identify it, and
   otherwise raises all of them so you can pick. It cannot switch to the right *tab*
   — no supported API for that.
-- **Antigravity toasts can deny, but not approve.** Its hook interface has no way
-  to grant permission — a hook can block a call or force a prompt, never allow
-  one — so Antigravity always asks in its own terminal as well. Deny from the
-  toast genuinely blocks the call.
-- **Antigravity toasts cannot follow its permission mode.** Its `PreToolUse` hook
-  carries no signal about whether Antigravity would have prompted you, so the
-  matcher is the only filter available. Narrow it if the defaults are too chatty.
+- **Approve for Antigravity is all-or-nothing.** Its hooks cannot grant a single
+  call, so the switch grants `command(*)` and `write_file(*)` for the whole
+  machine and relies on AgentToast being there to answer. There is no way to
+  scope that per call, per project or per session, and no way for the bridge to
+  cover its own absence.
+- **Antigravity toasts cannot follow its execution mode.** Antigravity gates
+  commands and file edits differently: commands go through its permission rules
+  in every mode, but file edits go through the *mode* — `default` pauses for a
+  diff review, `accept-edits` deliberately does not pause at all. Nothing in a
+  hook payload says which mode is running (`HookArgsCommon` carries no such
+  field), and `--mode` and Shift+Tab both change it without writing it down, so
+  AgentToast cannot follow it. **Raise a toast for** in the Antigravity panel is
+  the manual version: set it to *Commands only* for an `accept-edits` session.
+- **Antigravity toasts cannot tell an auto-approved call from a real question.**
+  Its `PreToolUse` hook fires for every matching tool whether or not Antigravity
+  would have prompted, so the matcher is the only filter there is.
 
 ## License
 

@@ -4,12 +4,19 @@
 //! It reads the hook payload from stdin, hands it to the AgentToast daemon,
 //! waits for the user's answer, and writes the decision to stdout.
 //!
-//! The one rule that shapes everything here: **a failing hook takes Antigravity
-//! down with it.** A non-zero exit, or a decision it cannot parse, does not
-//! degrade to "carry on without the hook" — it fails the tool call, and with a
-//! matcher on `run_command` that means the agent cannot do anything at all.
-//! So every failure path in this binary ends the same way: write nothing, exit
-//! zero, and let Antigravity fall back to its own permission prompt.
+//! The one rule that shapes everything here: **Antigravity ignores a hook that
+//! fails.** A non-zero exit, unparseable output, or a `command` naming a binary
+//! that is not there are all read as "this hook has no opinion" — the tool call
+//! goes ahead. That is forgiving, and it is also the danger, because AgentToast
+//! makes Approve work by granting Antigravity the tools in advance
+//! (`agenttoast_adapters::agy_permissions`) and then keeping quiet to let a call
+//! through. Silence means yes.
+//!
+//! So this binary never exits without writing something. Every failure it can
+//! see — no daemon, no answer in time, a payload it cannot parse — is answered
+//! with `force_ask`, which overrides the grant and puts the question back in the
+//! user's terminal, exactly where it would be if AgentToast were not installed.
+//! It still exits zero: the point is the decision on stdout, not the status.
 
 use agenttoast_adapters::agy::{AgyAdapter, AgyHookKind};
 use agenttoast_adapters::AgentAdapter;
@@ -39,10 +46,12 @@ async fn main() {
         .init();
 
     if let Err(e) = run().await {
-        // Deliberately not `exit(1)`. See the note at the top of the file:
-        // a failed hook blocks every tool call, so a broken bridge must look
-        // like an absent one.
-        error!(error = ?e, "Bridge failed; deferring to Antigravity's own prompt");
+        // Not `exit(1)`, and not silence either. Antigravity ignores a failed
+        // hook, and with the approval grants in place ignoring this one means
+        // approving the call. Saying `force_ask` hands the question to the user
+        // instead. See the note at the top of the file.
+        error!(error = ?e, "Bridge failed; asking Antigravity to prompt");
+        print!("{}", AgyAdapter::unanswered(&format!("AgentToast could not answer: {}", e)));
     }
 }
 
@@ -80,7 +89,6 @@ async fn run() -> Result<()> {
         .parse_hook_payload(&payload)
         .context("Failed to parse hook payload")?;
     event.process_id = agent_pid();
-
     info!(
         session_id = %event.session_id,
         tool = ?event.tool_name,
@@ -93,9 +101,9 @@ async fn run() -> Result<()> {
         event: event.clone(),
     };
 
-    // Bound the wait. Writing nothing and exiting 0 makes Antigravity fall back
-    // to its own permission prompt, so a user who never answers the toast is
-    // left deciding in the session rather than stuck forever.
+    // Bound the wait, and end it with a question rather than a shrug: an
+    // unanswered toast becomes Antigravity's own prompt, so the user decides in
+    // the session instead of being stuck — or silently approved.
     let response = match tokio::time::timeout(
         config.bridge_timeout,
         agenttoast_ipc::client::send_to_daemon(&config.ipc.pipe_name, &auth_token, &ipc_message),
@@ -108,32 +116,32 @@ async fn run() -> Result<()> {
                 timeout_secs = config.bridge_timeout.as_secs(),
                 "No response from AgentToast in time; deferring to the session"
             );
+            print!("{}", AgyAdapter::unanswered("Nobody answered the AgentToast prompt"));
             return Ok(());
         }
     };
 
-    // What an approval has to carry for Antigravity to honour it: it has no
-    // "a hook said yes" path, so the answer is a temporary permission grant
-    // naming this exact call.
-    let grants = agenttoast_adapters::agy::permission_grants(&payload);
-
     match response {
         IpcResponse::UserAction {
             action, text_input, ..
-        } => match adapter.format_for_call(kind, action, text_input.as_deref(), grants)? {
+        } => match adapter.format_for(kind, action, text_input.as_deref())? {
             Some(hook_response) => {
                 info!(response = %hook_response, "Sending decision to Antigravity");
                 print!("{}", hook_response);
             }
+            // Approve. Nothing to send: the grants AgentToast wrote are what
+            // let the call run, and a hook with no opinion is what lets them.
             None => {
-                info!("Handing the decision back to the session");
+                info!("Approved; leaving the call to Antigravity's own permissions");
             }
         },
         IpcResponse::Error { message } => {
             error!(error = %message, "Daemon returned error");
+            print!("{}", AgyAdapter::unanswered(&format!("AgentToast error: {}", message)));
         }
         IpcResponse::Ack { .. } => {
             debug!("Received ack instead of user action");
+            print!("{}", AgyAdapter::unanswered("AgentToast did not return a decision"));
         }
     }
 

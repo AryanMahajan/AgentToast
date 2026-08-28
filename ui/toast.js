@@ -155,9 +155,10 @@ function renderFooter(event) {
     }
 
     // "Open session" is normally the quiet tertiary next to Approve. When there
-    // is nothing to approve — an Antigravity toast, where a hook cannot grant
-    // permission — it is the only way forward, so it takes the primary styling
-    // rather than leaving the card with no obvious action.
+    // is nothing to approve — an Antigravity toast raised while AgentToast has
+    // not been given the grants that make Approve mean anything — it is the only
+    // way forward, so it takes the primary styling rather than leaving the card
+    // with no obvious action.
     const canAffirm = actions.some((a) => a.type === 'approve' || a.type === 'confirm');
 
     for (const action of actions) {

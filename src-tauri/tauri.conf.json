@@ -3,8 +3,10 @@
   "productName": "AgentToast",
   "identifier": "com.agenttoast.app",
   "build": {
-    "frontendDist": "../ui",
-    "beforeBuildCommand": "cargo build --release -p agenttoast-bridge-claude -p agenttoast-bridge-agy"
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "npm run build && cargo build --release -p agenttoast-bridge-claude -p agenttoast-bridge-agy",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420"
   },
   "app": {
     "withGlobalTauri": true,

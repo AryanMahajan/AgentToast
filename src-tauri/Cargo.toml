@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 agenttoast-core = { path = "../crates/agenttoast-core" }
 agenttoast-ipc = { path = "../crates/agenttoast-ipc" }
 agenttoast-adapters = { path = "../crates/agenttoast-adapters" }
+agenttoast-remote = { path = "../crates/agenttoast-remote" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

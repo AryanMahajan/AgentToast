@@ -5,7 +5,7 @@
 // subscription opened on mount would miss.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgyApprovalStatus, HookStatus, Session } from './types.ts';
+import type { AgyApprovalStatus, HookStatus, RemoteStatus, Session } from './types.ts';
 
 // `withGlobalTauri` is on, so the API comes off the window rather than from an
 // import. That keeps the front end free of an npm package that has to be kept in
@@ -87,6 +87,20 @@ export const disconnectAgy = () => invoke<HookStatus>('disconnect_agy_hooks');
 export const agyApprovalStatus = () => invoke<AgyApprovalStatus>('agy_approval_status');
 export const enableAgyApproval = () => invoke<AgyApprovalStatus>('enable_agy_approval');
 export const disableAgyApproval = () => invoke<AgyApprovalStatus>('disable_agy_approval');
+
+/* --------------------------------------------------------------- remote --- */
+
+export const remoteStatus = () => invoke<RemoteStatus>('remote_status');
+export const setRemoteEnabled = (enabled: boolean) =>
+    invoke<RemoteStatus>('set_remote_enabled', { enabled });
+export const setRemoteApprove = (allow: boolean) =>
+    invoke<RemoteStatus>('set_remote_approve', { allow });
+export const setRemotePort = (port: number) => invoke<RemoteStatus>('set_remote_port', { port });
+export const startRemotePairing = () => invoke<RemoteStatus>('start_remote_pairing');
+export const cancelRemotePairing = () => invoke<RemoteStatus>('cancel_remote_pairing');
+export const revokeRemoteDevice = (deviceId: string) =>
+    invoke<RemoteStatus>('revoke_remote_device', { deviceId });
+export const revokeAllRemoteDevices = () => invoke<RemoteStatus>('revoke_all_remote_devices');
 
 /**
  * Ask for a folder.

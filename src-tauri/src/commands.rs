@@ -426,3 +426,103 @@ pub fn disable_agy_approval() -> Result<AgyApprovalStatus, String> {
     tracing::info!("Antigravity approval disabled");
     Ok(approval_status())
 }
+
+/* --------------------------------------------------------- remote control --- */
+
+/// Read the remote panel's state without changing anything.
+#[tauri::command]
+pub async fn remote_status(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<crate::remote::RemoteStatus, String> {
+    Ok(state.remote.status().await)
+}
+
+/// Start or stop listening for phones on the local network.
+#[tauri::command]
+pub async fn set_remote_enabled(
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<crate::remote::RemoteStatus, String> {
+    state
+        .remote
+        .set_enabled(enabled)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(state.remote.status().await)
+}
+
+/// Choose whether a paired device may approve, or only deny.
+#[tauri::command]
+pub async fn set_remote_approve(
+    state: tauri::State<'_, Arc<AppState>>,
+    allow: bool,
+) -> Result<crate::remote::RemoteStatus, String> {
+    state
+        .remote
+        .set_allow_approve(allow)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(state.remote.status().await)
+}
+
+/// Move to a different port, rebinding if the server is already up.
+#[tauri::command]
+pub async fn set_remote_port(
+    state: tauri::State<'_, Arc<AppState>>,
+    port: u16,
+) -> Result<crate::remote::RemoteStatus, String> {
+    if port < 1024 {
+        return Err("Pick a port above 1023 — lower ones need administrator rights.".into());
+    }
+    state
+        .remote
+        .set_port(port)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(state.remote.status().await)
+}
+
+/// Put a fresh QR on screen for a phone to scan.
+#[tauri::command]
+pub async fn start_remote_pairing(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<crate::remote::RemoteStatus, String> {
+    state
+        .remote
+        .begin_pairing()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(state.remote.status().await)
+}
+
+/// Take the QR down without anyone having used it.
+#[tauri::command]
+pub async fn cancel_remote_pairing(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<crate::remote::RemoteStatus, String> {
+    state.remote.cancel_pairing().await;
+    Ok(state.remote.status().await)
+}
+
+/// Un-pair one device. It stops working immediately, not at the next restart.
+#[tauri::command]
+pub async fn revoke_remote_device(
+    state: tauri::State<'_, Arc<AppState>>,
+    device_id: String,
+) -> Result<crate::remote::RemoteStatus, String> {
+    state
+        .remote
+        .revoke(&device_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(state.remote.status().await)
+}
+
+/// Un-pair everything — the "I lost my phone" button.
+#[tauri::command]
+pub async fn revoke_all_remote_devices(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<crate::remote::RemoteStatus, String> {
+    state.remote.revoke_all().await.map_err(|e| e.to_string())?;
+    Ok(state.remote.status().await)
+}

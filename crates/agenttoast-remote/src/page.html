@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+
+<!--
+  The phone page.
+
+  One self-contained file on purpose. It is served by a plain HTTP server rather
+  than by Tauri, so a bundled build would have to be located on disk at runtime
+  and would differ between a dev run and an installed one. It also has to work
+  on whatever browser is on someone's phone, and it is the one surface here that
+  a stranger's device loads — all three argue for one file with no build step
+  and nothing to audit but itself.
+-->
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>AgentToast</title>
+  <link id="favicon" rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%234c5fd7'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --surface: #fcfcfd;
+      --raised: #ffffff;
+      --border: rgba(0, 0, 0, 0.09);
+      --fg: #16171a;
+      --fg2: #565a61;
+      --fg3: #8a8e96;
+      --fill: rgba(0, 0, 0, 0.045);
+      --accent: #4c5fd7;
+      --accent-on: #ffffff;
+      --ok: #1f8a5f;
+      --warn: #9a6f14;
+      --err: #c33a2e;
+      --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --surface: #1c1d21;
+        --raised: #2a2b31;
+        --border: rgba(255, 255, 255, 0.1);
+        --fg: #f3f4f6;
+        --fg2: #a9adb6;
+        --fg3: #7b8089;
+        --fill: rgba(255, 255, 255, 0.07);
+        --accent: #8098f8;
+        --accent-on: #141519;
+        --ok: #4ecb8f;
+        --warn: #e0a83c;
+        --err: #f2705f;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--surface);
+      color: var(--fg);
+      font-family: var(--font-ui);
+      font-size: 15px;
+      line-height: 1.45;
+      -webkit-text-size-adjust: 100%;
+      padding: 0 14px env(safe-area-inset-bottom) 14px;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 14px 0 11px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .mark {
+      width: 11px;
+      height: 11px;
+      flex: none;
+      border-radius: 50%;
+      background: var(--fg3);
+      transition: background 0.25s;
+    }
+    .mark.live { background: var(--ok); }
+    .mark.down { background: var(--err); }
+
+    h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .who {
+      font-size: 12px;
+      color: var(--fg3);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 38%;
+    }
+
+    /* Big enough to hit with a thumb without looking, because the reason you
+       reach for it is that the chime went off at the wrong moment. */
+    .chip {
+      flex: none;
+      width: 38px;
+      min-height: 38px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--fill);
+      font-size: 15px;
+      line-height: 1;
+    }
+    .chip.off { opacity: 0.55; }
+
+    /* Shown only when a request is waiting and the browser has not yet let us
+       make a sound. Saying nothing would look like the chime is broken. */
+    .unlock {
+      margin: 0;
+      padding: 9px 0 0;
+      font-size: 12px;
+      color: var(--warn);
+      text-align: center;
+    }
+
+    h2 {
+      margin: 22px 0 9px;
+      font-size: 11.5px;
+      font-weight: 650;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--fg3);
+    }
+
+    .card {
+      background: var(--raised);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      padding: 14px;
+      margin-bottom: 11px;
+    }
+
+    .card.new { animation: rise 0.28s ease-out; }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(7px); }
+    }
+
+    .meta {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      font-size: 11.5px;
+      color: var(--fg3);
+      margin-bottom: 5px;
+    }
+
+    .agent { font-weight: 650; color: var(--accent); }
+    .waited { margin-left: auto; white-space: nowrap; }
+
+    .title {
+      font-size: 15.5px;
+      font-weight: 600;
+      line-height: 1.3;
+      margin-bottom: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    .detail {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.5;
+      background: var(--fill);
+      border-radius: 8px;
+      padding: 9px 10px;
+      margin-bottom: 10px;
+      max-height: 40vh;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .folder {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--fg3);
+      margin-bottom: 10px;
+      direction: rtl;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .buttons { display: flex; gap: 9px; }
+
+    button {
+      flex: 1;
+      /* Comfortably past the 44px minimum touch target — these are the two
+         buttons the whole page exists for, and a mis-tap here runs a command
+         nobody meant to run. */
+      min-height: 50px;
+      padding: 0 14px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 620;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.15s, transform 0.08s;
+    }
+    button:active { transform: scale(0.975); }
+    button[disabled] { opacity: 0.5; cursor: default; }
+
+    .affirm { background: var(--accent); color: var(--accent-on); }
+    .reject { background: var(--fill); color: var(--fg); border-color: var(--border); }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13.5px;
+    }
+    .row:last-child { border-bottom: 0; }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      flex: none;
+      border-radius: 50%;
+      background: var(--fg3);
+    }
+    .dot.waiting { background: var(--warn); }
+    .dot.working { background: var(--ok); }
+
+    .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row .state { color: var(--fg3); font-size: 12px; white-space: nowrap; }
+
+    .empty {
+      color: var(--fg3);
+      font-size: 14px;
+      text-align: center;
+      padding: 34px 10px;
+      line-height: 1.5;
+    }
+
+    .note {
+      font-size: 12px;
+      color: var(--fg3);
+      text-align: center;
+      padding: 20px 0 26px;
+      line-height: 1.5;
+    }
+
+    .flash {
+      position: fixed;
+      left: 50%;
+      bottom: calc(18px + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      z-index: 5;
+      max-width: calc(100% - 32px);
+      padding: 11px 16px;
+      border-radius: 10px;
+      background: var(--fg);
+      color: var(--surface);
+      font-size: 13.5px;
+      font-weight: 550;
+      box-shadow: 0 8px 26px rgba(0, 0, 0, 0.3);
+      animation: rise 0.2s ease-out;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <span class="mark" id="mark"></span>
+    <h1>AgentToast</h1>
+    <span class="who" id="who"></span>
+    <button type="button" class="chip" id="sound" aria-label="Mute the chime">&#128276;</button>
+  </header>
+
+  <p class="unlock" id="unlock" hidden>Tap anywhere to turn the chime on.</p>
+
+  <main id="requests">
+    <div class="empty">Connecting…</div>
+  </main>
+
+  <section id="sessions"></section>
+
+  <p class="note">
+    This page only alerts you while it is open.<br>Traffic on your network is not encrypted.
+  </p>
+
+  <script>
+    'use strict';
+
+    // Present on every API call. Its value is irrelevant — a page on another
+    // origin cannot set a custom header without a CORS preflight, and the
+    // server answers none, so its mere presence proves the request came from
+    // here. See the module docs in server.rs.
+    const HEADERS = { 'x-agenttoast': '1' };
+
+    const POLL_MS = 2000;
+    const requestsEl = document.getElementById('requests');
+    const sessionsEl = document.getElementById('sessions');
+    const markEl = document.getElementById('mark');
+    const whoEl = document.getElementById('who');
+
+    // Event ids already on screen, so a genuinely new request can be told from
+    // the same one arriving again on the next poll.
+    let known = new Set();
+    // Answered here and awaiting confirmation from the next poll. Without this
+    // a card reappears for one frame between the tap and the server catching
+    // up, which reads as the tap having failed.
+    let settled = new Set();
+    let firstLoad = true;
+    let timer = null;
+
+    function escape(text) {
+      return String(text).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    function waited(seconds) {
+      if (seconds < 60) return seconds + 's';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+      return Math.floor(seconds / 3600) + 'h';
+    }
+
+    function flash(message) {
+      const existing = document.querySelector('.flash');
+      if (existing) existing.remove();
+
+      const el = document.createElement('div');
+      el.className = 'flash';
+      el.textContent = message;
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 3200);
+    }
+
+    /* ---------------------------------------------------------- alerting ---
+
+       A chime and a buzz when something new needs an answer, repeated while it
+       goes unanswered. This is the whole notification story while the page is
+       open — a phone that is awake and showing this page can be nudged, and one
+       that is asleep cannot be, which is the honest limit of a page rather than
+       an app.
+
+       The awkward part is that a browser will not make a sound until the user
+       has interacted with the page at least once, and arriving here from a QR
+       code means they have not. So the audio context is created on the first
+       tap anywhere, and until that happens the page says so rather than looking
+       broken. `navigator.vibrate` is gated the same way, which is why both live
+       behind the same check. */
+
+    const REPEAT_MS = 30000;
+
+    let audio = null;
+    let muted = false;
+    let repeatTimer = null;
+
+    const soundEl = document.getElementById('sound');
+    const unlockEl = document.getElementById('unlock');
+    const faviconEl = document.getElementById('favicon');
+
+    const FAVICON = {
+      idle: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%234c5fd7'/%3E%3C/svg%3E",
+      alert: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23e0a83c'/%3E%3C/svg%3E"
+    };
+
+    try {
+      muted = localStorage.getItem('agenttoast.muted') === '1';
+    } catch (e) {
+      // Private browsing, or storage blocked. Defaults are fine.
+    }
+
+    function canSound() {
+      return !muted && audio !== null && audio.state === 'running';
+    }
+
+    /* Called on any interaction, not just once: iOS suspends the context when
+       the page is backgrounded, so it has to be resumed again on return. */
+    function unlockAudio() {
+      if (muted) return;
+      try {
+        if (audio === null) audio = new (window.AudioContext || window.webkitAudioContext)();
+        if (audio.state === 'suspended') audio.resume();
+      } catch (e) {
+        audio = null;
+      }
+      showUnlockHint();
+    }
+
+    function showUnlockHint() {
+      unlockEl.hidden = muted || canSound() || !requestsEl.querySelector('.card');
+    }
+
+    function paintSoundButton() {
+      soundEl.textContent = muted ? '\u{1F515}' : '\u{1F514}';
+      soundEl.className = muted ? 'chip off' : 'chip';
+      soundEl.setAttribute('aria-label', muted ? 'Unmute the chime' : 'Mute the chime');
+    }
+
+    function chime(first) {
+      if (muted) return;
+
+      // A double buzz for something new, a single one for a reminder, so the
+      // difference is audible without looking.
+      if (navigator.vibrate) {
+        try { navigator.vibrate(first ? [90, 60, 90] : [70]); } catch (e) { /* refused */ }
+      }
+      if (!canSound()) {
+        showUnlockHint();
+        return;
+      }
+
+      try {
+        const osc = audio.createOscillator();
+        const gain = audio.createGain();
+        osc.frequency.value = first ? 660 : 560;
+        gain.gain.setValueAtTime(0.001, audio.currentTime);
+        gain.gain.exponentialRampToValueAtTime(first ? 0.18 : 0.12, audio.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.35);
+        osc.connect(gain).connect(audio.destination);
+        osc.start();
+        osc.stop(audio.currentTime + 0.36);
+      } catch (e) {
+        // Nothing to do about it, and the buzz and the card still happened.
+      }
+    }
+
+    /* Keep nagging while something is waiting. The agent stays blocked until it
+       is answered, so one chime that was missed should not be the end of it —
+       and the mute button is the way out, not closing the page. */
+    function setRepeat(active, restart) {
+      if (repeatTimer !== null && (!active || restart)) {
+        clearInterval(repeatTimer);
+        repeatTimer = null;
+      }
+      if (active && repeatTimer === null) {
+        repeatTimer = setInterval(() => chime(false), REPEAT_MS);
+      }
+    }
+
+    /* The tab title and the favicon, for a page sitting in a background tab.
+       Not a notification, but it is what a glance at the tab strip shows. */
+    function updateBadge(waiting) {
+      document.title = waiting ? '(' + waiting + ') AgentToast' : 'AgentToast';
+      faviconEl.href = waiting ? FAVICON.alert : FAVICON.idle;
+    }
+
+    function syncAlerts(waiting, arriving) {
+      updateBadge(waiting);
+      if (arriving > 0) chime(true);
+      // Measure the repeat from the last alert rather than from whenever the
+      // timer happened to start.
+      setRepeat(waiting > 0, arriving > 0);
+      showUnlockHint();
+    }
+
+    soundEl.addEventListener('click', () => {
+      muted = !muted;
+      try { localStorage.setItem('agenttoast.muted', muted ? '1' : '0'); } catch (e) { /* fine */ }
+      paintSoundButton();
+      // Unmuting is itself a tap, so it is also the gesture that unlocks audio.
+      if (!muted) unlockAudio();
+      showUnlockHint();
+    });
+
+    document.addEventListener('pointerdown', unlockAudio);
+    document.addEventListener('keydown', unlockAudio);
+    paintSoundButton();
+
+    function renderRequests(requests) {
+      const pending = requests.filter(r => !settled.has(r.event_id));
+
+      if (!pending.length) {
+        known = new Set();
+        requestsEl.innerHTML =
+          '<div class="empty">Nothing is waiting on you.<br>Requests appear here as they arrive.</div>';
+        syncAlerts(0, 0);
+        return;
+      }
+
+      // On the very first load nothing is "new" — you just opened the page and
+      // are looking at it. The repeat timer still starts, so anything still
+      // unanswered half a minute later does chime.
+      const arriving = firstLoad ? 0 : pending.filter(r => !known.has(r.event_id)).length;
+
+      requestsEl.innerHTML = pending.map(request => {
+        const fresh = !known.has(request.event_id) && !firstLoad;
+        const buttons = request.actions.map(action =>
+          '<button class="' + action.kind + '" data-event="' + escape(request.event_id) +
+          '" data-action="' + escape(action.action) + '">' + escape(action.label) + '</button>'
+        ).join('');
+
+        return '<article class="card' + (fresh ? ' new' : '') + '">' +
+          '<div class="meta">' +
+            '<span class="agent">' + escape(request.agent) + '</span>' +
+            (request.tool ? '<span>' + escape(request.tool) + '</span>' : '') +
+            '<span class="waited">' + waited(request.waiting_seconds) + '</span>' +
+          '</div>' +
+          '<div class="title">' + escape(request.title) + '</div>' +
+          (request.detail ? '<div class="detail">' + escape(request.detail) + '</div>' : '') +
+          (request.folder ? '<div class="folder">' + escape(request.folder) + '</div>' : '') +
+          '<div class="buttons">' + buttons + '</div>' +
+        '</article>';
+      }).join('');
+
+      known = new Set(pending.map(r => r.event_id));
+      syncAlerts(pending.length, arriving);
+    }
+
+    function renderSessions(sessions) {
+      if (!sessions.length) {
+        sessionsEl.innerHTML = '';
+        return;
+      }
+
+      sessionsEl.innerHTML = '<h2>Sessions</h2>' + sessions.map(session => {
+        const folder = session.folder ? session.folder.split(/[\\/]/).filter(Boolean).pop() : null;
+        const tone = session.waiting ? 'waiting' : (session.state === 'Working' ? 'working' : '');
+        return '<div class="row">' +
+          '<span class="dot ' + tone + '"></span>' +
+          '<span class="name">' + escape(folder || session.session_id.slice(0, 8)) + '</span>' +
+          '<span class="state">' + escape(session.state) + '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    async function poll() {
+      try {
+        const response = await fetch('/api/state', { headers: HEADERS, cache: 'no-store' });
+
+        // Revoked from the dashboard, or the settings file was replaced. The
+        // reload lands on the "not paired" page, which says what to do.
+        if (response.status === 401) { location.reload(); return; }
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+
+        const state = await response.json();
+        markEl.className = 'mark live';
+        whoEl.textContent = state.device + (state.allow_approve ? '' : ' · deny only');
+
+        renderRequests(state.requests);
+        renderSessions(state.sessions);
+        firstLoad = false;
+      } catch (e) {
+        markEl.className = 'mark down';
+        if (firstLoad) {
+          requestsEl.innerHTML =
+            '<div class="empty">Cannot reach AgentToast.<br>Check that your PC is awake and on this network.</div>';
+        }
+      }
+    }
+
+    async function respond(eventId, action, button) {
+      const card = button.closest('.card');
+      card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+
+      try {
+        const response = await fetch('/api/respond', {
+          method: 'POST',
+          headers: Object.assign({ 'content-type': 'application/json' }, HEADERS),
+          body: JSON.stringify({ event_id: eventId, action: action })
+        });
+        const body = await response.json().catch(() => ({}));
+
+        if (response.ok) {
+          // Hold it locally until the server agrees, so the card does not
+          // flicker back between the tap and the next poll.
+          settled.add(eventId);
+          known.delete(eventId);
+          card.remove();
+          if (!requestsEl.querySelector('.card')) renderRequests([]);
+          flash(action === 'deny' || action === 'reject' ? 'Denied' : 'Approved');
+        } else {
+          card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+          flash(body.error || 'That did not go through.');
+        }
+      } catch (e) {
+        card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        flash('Could not reach AgentToast.');
+      }
+
+      poll();
+    }
+
+    requestsEl.addEventListener('click', event => {
+      const button = event.target.closest('button[data-event]');
+      if (button && !button.disabled) {
+        respond(button.dataset.event, button.dataset.action, button);
+      }
+    });
+
+    // Phones suspend timers in a backgrounded tab, so a page brought back after
+    // a while would otherwise show a stale list until the next tick. Poll at
+    // once on return instead.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') poll();
+    });
+
+    poll();
+    timer = setInterval(poll, POLL_MS);
+  </script>
+</body>
+
+</html>

@@ -3,6 +3,7 @@ members = [
     "crates/agenttoast-core",
     "crates/agenttoast-ipc",
     "crates/agenttoast-adapters",
+    "crates/agenttoast-remote",
     "crates/agenttoast-bridge-claude",
     "crates/agenttoast-bridge-agy",
     "src-tauri",

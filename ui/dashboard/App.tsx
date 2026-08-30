@@ -1,13 +1,20 @@
-// The dashboard shell: a header, two tabs, and whichever one is showing.
+// The dashboard shell: a header, three tabs, and whichever one is showing.
 
 import { useEffect, useRef, useState } from 'react';
 import { agyStatus, claudeStatus, getSessions, usePolled } from './api.ts';
 import { Connectors } from './Connectors.tsx';
+import { Remote } from './Remote.tsx';
 import { Sessions, sortSessions } from './Sessions.tsx';
 
 const SESSION_POLL_MS = 2000;
 
-type TabId = 'sessions' | 'connectors';
+type TabId = 'sessions' | 'connectors' | 'remote';
+
+const TITLES: Record<TabId, string> = {
+    sessions: 'Active sessions',
+    connectors: 'Connectors',
+    remote: 'Remote',
+};
 
 function Tab({
     active,
@@ -95,7 +102,7 @@ export function App() {
                             agenttoast
                         </div>
                         <h1 className="font-ui text-xl leading-tight font-semibold tracking-tight text-fg">
-                            {tab === 'sessions' ? 'Active sessions' : 'Connectors'}
+                            {TITLES[tab]}
                         </h1>
                     </div>
                 </div>
@@ -117,17 +124,26 @@ export function App() {
                         onSelect={() => setTab('connectors')}
                         label="Connectors"
                     />
+                    <Tab
+                        active={tab === 'remote'}
+                        onSelect={() => setTab('remote')}
+                        label="Remote"
+                    />
                 </nav>
             </header>
 
             <main className="flex-1 px-6 pt-4 pb-6">
-                {/* Both stay mounted so switching tabs does not throw away a
-                    panel's state and re-run every command from scratch. */}
+                {/* All three stay mounted so switching tabs does not throw
+                    away a panel's state and re-run every command from
+                    scratch. Each one polls only while it is the visible tab. */}
                 <div hidden={tab !== 'sessions'}>
                     <Sessions sessions={sessions} onAnswered={() => void refresh()} />
                 </div>
                 <div hidden={tab !== 'connectors'}>
                     <Connectors active={tab === 'connectors'} />
+                </div>
+                <div hidden={tab !== 'remote'}>
+                    <Remote active={tab === 'remote'} />
                 </div>
             </main>
         </div>

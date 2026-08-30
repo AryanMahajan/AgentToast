@@ -235,6 +235,58 @@ unanswered toast comes back on the reminder schedule.
 **The dashboard** (left-click the tray icon) lists active sessions and lets you
 answer from there too.
 
+## Answering from your phone
+
+The **Remote** tab serves a small page on your local network. Open it on a phone
+on the same wifi and you get the same requests, with the same buttons.
+
+```
+Remote
+
+  ●  Answer from your phone                    [ Turn off ]
+     http://192.168.1.40:8787
+
+  ●  Approve from a phone                      [ Deny only ]
+     on — a paired device can let a command run
+
+     Port  [ 8787 ]                            [ Apply ]
+
+     ┌───────────────┐
+     │  ▄▄▄▄  ▄  ▄▄  │   Scan this with your phone's camera
+     │  █  █ ▄█▄ ██  │   http://192.168.1.40:8787/pair?c=…
+     │  ▀▀▀▀  ▀  ▀▀  │   expires in 4:37
+     └───────────────┘             [ Cancel ]
+```
+
+**It is off until you turn it on.** Nothing listens before that.
+
+**Pairing.** Press *Pair a device* and scan the QR. The QR carries a one-time code
+that is good for five minutes; the phone trades it for its own key, which arrives
+in a cookie and never appears in a URL. Each paired device is listed and can be
+revoked on its own — a revoked phone stops working on its next request, not at the
+next restart.
+
+**Approving is a separate switch.** Denying from a phone can never do damage;
+approving runs a command on your machine. It defaults on, and *Deny only* turns it
+off without turning the whole thing off.
+
+The first time it binds a port, **Windows Defender Firewall will ask** whether to
+let AgentToast accept connections. Say yes for **private networks**; a phone cannot
+reach it otherwise.
+
+### What it deliberately does not do
+
+- **Same network only.** No relay, no account, no server anyone has to run — so it
+  does nothing over mobile data.
+- **No alerts while the page is closed.** A browser tab cannot wake a sleeping
+  phone; that needs a real app and a push service. The page buzzes and chimes
+  while it is open, and the desktop toast is still the thing that always fires.
+- **The traffic is not encrypted.** Anyone who can watch your network can read what
+  a request says and, in principle, act as your phone. Fine on a home or office
+  network; not fine on public wifi. Leave it off there.
+- **Open Session is desktop-only.** Raising a window on a machine you are not
+  sitting at is not something a phone should be able to ask for.
+
 ## Configuration
 
 Optional. Copy `config/default.toml` to `~/.agenttoast/config.toml` and edit:
@@ -259,7 +311,16 @@ AgentToast can approve commands on your machine, so it is worth being clear abou
 what that means.
 
 - The bridge and tray app talk over a **local named pipe**, guarded by a token
-  written to `~/.agenttoast/auth_token`. Nothing is exposed to the network.
+  written to `~/.agenttoast/auth_token`.
+- **Nothing is exposed to the network unless you switch on the Remote tab**, which
+  is off by default. When it is on, a paired phone can approve commands, so that
+  surface is guarded by a per-device token delivered through one-time pairing, an
+  `HttpOnly; SameSite=Strict` cookie, a custom header no cross-origin request can
+  set without a preflight this server refuses, and a `Host` check that rejects
+  anything addressed by name rather than by IP — which is what a DNS-rebinding
+  attack needs. What it is *not* guarded by is TLS: the traffic is plain HTTP, so
+  a hostile device on the same network can read it. Paired devices live in
+  `~/.agenttoast/remote.json` and can be revoked from the dashboard.
 - **Connect writes to the agent's own config file** — Claude Code's settings, or
   Antigravity's `hooks.json`. That is the whole feature, but it is your config —
   hence the backup, and the fact that other tools' hooks are never touched.
@@ -335,6 +396,10 @@ Working and in daily use, but early. Known gaps:
 - **Antigravity toasts cannot tell an auto-approved call from a real question.**
   Its `PreToolUse` hook fires for every matching tool whether or not Antigravity
   would have prompted, so the matcher is the only filter there is.
+- **The phone page works on your network only, and only while it is open.** No
+  relay and no account, so nothing over mobile data; and a browser tab cannot
+  wake a sleeping phone, so it cannot buzz you from a pocket. The traffic is
+  plain HTTP.
 
 ## License
 

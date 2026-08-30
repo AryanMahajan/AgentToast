@@ -12,6 +12,7 @@ mod daemon;
 mod focus;
 mod hooks;
 mod install;
+mod remote;
 mod tray;
 mod window;
 
@@ -19,6 +20,7 @@ use agenttoast_core::config::AppConfig;
 use agenttoast_core::router::ActionRouter;
 use agenttoast_core::session::SessionRegistry;
 use std::sync::Arc;
+use tauri::Manager;
 use tracing::{info, warn};
 
 /// Shared application state accessible from Tauri commands.
@@ -27,6 +29,10 @@ pub struct AppState {
     pub sessions: SessionRegistry,
     pub router: ActionRouter,
     pub auth_token: String,
+    /// The LAN remote. Present whether or not it is switched on — it holds the
+    /// saved settings and the paired devices, which the dashboard reads before
+    /// anything is ever started.
+    pub remote: remote::Remote,
 }
 
 fn main() {
@@ -51,11 +57,17 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Built from clones rather than borrowing out of `AppState`: the remote
+    // server is a third client of the same registry and router the toast and
+    // the dashboard use, and both types are handles over shared state.
+    let remote = remote::Remote::load(&config.data_dir, sessions.clone(), router.clone());
+
     let state = AppState {
         config,
         sessions,
         router,
         auth_token,
+        remote,
     };
 
     tauri::Builder::default()
@@ -94,6 +106,14 @@ fn main() {
             commands::agy_approval_status,
             commands::enable_agy_approval,
             commands::disable_agy_approval,
+            commands::remote_status,
+            commands::set_remote_enabled,
+            commands::set_remote_approve,
+            commands::set_remote_port,
+            commands::start_remote_pairing,
+            commands::cancel_remote_pairing,
+            commands::revoke_remote_device,
+            commands::revoke_all_remote_devices,
         ])
         .setup(|app| {
             // A grant with no hook behind it is a standing instruction to
@@ -123,6 +143,16 @@ fn main() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 daemon::start(app_handle).await;
+            });
+
+            // Bring the LAN remote back up if it was left on. Nothing binds
+            // unless the saved setting says so, and a failure here — a port
+            // taken by something else, most likely — is reported in the
+            // dashboard rather than stopping the app.
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app_handle.state::<Arc<AppState>>();
+                state.remote.apply().await;
             });
 
             info!("AgentToast setup complete");

@@ -1,4 +1,5 @@
-# Builds the Windows installer and attaches it to a GitHub Release.
+# Builds the Windows installer and the macOS disk image, and attaches both to a
+# GitHub Release.
 #
 # Triggered by pushing a tag like v0.1.0. The version in the tag should match
 # the one in Cargo.toml — nothing enforces that, so check before tagging.
@@ -8,27 +9,35 @@ on:
   push:
     tags:
       - "v*"
-  # Lets you build an installer without tagging, to check the workflow itself.
+  # Lets you build the artifacts without tagging, to check the workflow itself.
+  # The release job is skipped, so nothing is published.
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  # Runs alongside the build rather than before it. Tests need a debug build of
-  # the whole tree and the installer needs a release one, so making the build
+  # Runs alongside the builds rather than before them. Tests need a debug build
+  # of the whole tree and the bundles need a release one, so making the builds
   # wait for the tests would mean compiling everything twice, in series.
+  #
+  # Both platforms, because a passing Windows suite says nothing about the
+  # `#[cfg(target_os = "macos")]` half of the tree — it is not compiled there.
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: test
+          key: test-${{ matrix.os }}
       - run: cargo test --workspace
 
-  installer:
+  windows:
     runs-on: windows-latest
 
     steps:
@@ -73,24 +82,104 @@ jobs:
       - name: Upload the installer as a build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AgentToast-installer
+          name: AgentToast-installer-windows
           path: target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
-      - name: Attach the installer to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+  macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both architectures, because the disk image is universal: `cargo` has no
+      # universal target, so `build.sh` builds each one and `lipo`s them
+      # together the way Tauri does for the app binary itself.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install front-end packages
+        run: npm ci
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install the Tauri CLI
+        run: cargo binstall tauri-cli --version "^2" --no-confirm --locked
+
+      # Not a bare `cargo tauri build`: the mac config carries the `.icns`, the
+      # bundle targets and the bridges under the names they have here, and the
+      # bridges have to be built for the same target as the app or an Intel Mac
+      # gets an app it can run and two bridges it cannot. See the script.
+      - name: Build the app and the disk image
+        run: ./macos/scripts/build.sh --target universal-apple-darwin
+
+      - name: Upload the disk image as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentToast-installer-macos
+          path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  # One job publishes, so the two builds cannot race each other into creating
+  # two draft releases.
+  release:
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Collect both builds
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Draft the release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
-          files: target/release/bundle/nsis/*-setup.exe
+          files: |
+            artifacts/**/*-setup.exe
+            artifacts/**/*.dmg
           body: |
+            ## Windows
+
             Download the `.exe` below and run it.
 
             Windows will warn that the publisher is unknown — the installer is
             not code-signed. Choose **More info → Run anyway**.
 
-            After installing, open the dashboard from the tray icon and press
-            **Connect** — under *Claude Code*, under *Antigravity*, or both —
-            then restart any session that is already running. Both agents read
-            their hooks when a session starts.
+            ## macOS
+
+            Download the `.dmg` below and drag AgentToast to Applications. It is
+            universal — Apple silicon and Intel — and needs macOS 10.15 or newer.
+
+            The build is **not signed or notarised**, so Gatekeeper will refuse a
+            copy that was downloaded. The way past it is right-click → **Open**
+            the first time, or:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/AgentToast.app
+            ```
+
+            If you would rather not, build it yourself — `macos/README.md`.
+
+            ## Then, on either
+
+            Open the dashboard and press **Connect** — under *Claude Code*, under
+            *Antigravity*, or both — then restart any session that is already
+            running. Both agents read their hooks when a session starts.

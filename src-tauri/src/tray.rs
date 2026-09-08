@@ -7,6 +7,12 @@ use tauri::{
 };
 use tracing::info;
 
+/// Whether a left click on the tray icon opens the dashboard directly.
+#[cfg(not(target_os = "macos"))]
+const OPEN_DASHBOARD_ON_LEFT_CLICK: bool = true;
+#[cfg(target_os = "macos")]
+use crate::mac::runtime::OPEN_DASHBOARD_ON_LEFT_CLICK;
+
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let quit = MenuItem::with_id(app, "quit", "Quit AgentToast", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
@@ -20,14 +26,24 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .ok_or("no application icon is embedded to use in the tray")?;
 
-    let _tray = TrayIconBuilder::with_id("agenttoast")
+    let builder = TrayIconBuilder::with_id("agenttoast")
         .icon(icon)
         .menu(&menu)
-        .tooltip("AgentToast — Monitoring agent sessions")
+        .tooltip("AgentToast — Monitoring agent sessions");
+
+    // A macOS menu bar extra opens its menu on a left click, the way Docker and
+    // Tailscale do; the dashboard is reached from that menu instead.
+    #[cfg(target_os = "macos")]
+    let builder = crate::mac::runtime::configure_tray(builder);
+
+    let _tray = builder
         // Left-clicking the tray icon opens the dashboard. Hiding a toast
         // leaves its request pending, so there has to be an obvious way back
         // to it that is quicker than hunting through a menu.
         .on_tray_icon_event(|tray, event| {
+            if !OPEN_DASHBOARD_ON_LEFT_CLICK {
+                return;
+            }
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,

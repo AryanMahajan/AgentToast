@@ -19,7 +19,15 @@ uuid.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
-tauri = { version = "2", features = ["tray-icon"] }
+# `macos-private-api` pairs with `macOSPrivateApi` in tauri.conf.json and is
+# what allows a transparent window. Toasts are transparent on every platform
+# (the card has a drop shadow and slides in), so without it macOS refuses to
+# build one. It has to sit here rather than under a `[target.'cfg(...)']`
+# section: tauri-build reads the feature list for the `tauri` dependency out
+# of every section in this file regardless of the target being built, and
+# rejects the build when what it finds disagrees with tauri.conf.json. The
+# feature gates macOS-only APIs and is inert on Windows.
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
@@ -28,3 +36,14 @@ sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+
+# macOS raises an application rather than a window, and does it by activating a
+# running application instead of asking Launch Services to (re)open a bundle —
+# `open` makes terminals spawn a second window. See `macos/src/focus.rs`. Both
+# crates are already in the lock file by way of Tauri's own macOS backend.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+toml = "0.9"

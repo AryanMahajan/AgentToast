@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "build": {
+    "beforeBuildCommand": "npm run build"
+  },
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "icon": ["../macos/icons/icon.icns"],
+    "resources": {
+      "../target/release/agenttoast-bridge-claude": "agenttoast-bridge-claude",
+      "../target/release/agenttoast-bridge-agy": "agenttoast-bridge-agy"
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}

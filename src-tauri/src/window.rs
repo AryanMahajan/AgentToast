@@ -160,6 +160,11 @@ pub fn show_toast(
 
     let window = builder.build()?;
 
+    // macOS pins a window to the desktop it was created on. A toast the user
+    // cannot see until they happen to switch Spaces is the same as no toast.
+    #[cfg(target_os = "macos")]
+    crate::mac::runtime::follow_the_user(&window);
+
     // Release the slot however the window goes away.
     let close_app = app.clone();
     let close_label = label.clone();
@@ -227,6 +232,12 @@ pub fn close_toast(app: &AppHandle, event_id: &str) -> Result<(), Box<dyn std::e
     if let Some(window) = app.get_webview_window(&label) {
         window.close()?;
     }
+
+    // Answering a toast means clicking one of our windows, which on macOS
+    // brings the whole application forward. Give the foreground back.
+    #[cfg(target_os = "macos")]
+    crate::mac::runtime::step_back(app);
+
     Ok(())
 }
 
@@ -290,12 +301,19 @@ pub fn hide_toast(app: &AppHandle, event_id: &str) {
         let _ = window.hide();
     }
 
-    let stack = app.state::<ToastStack>();
-    let mut slots = stack.0.lock().unwrap();
-    if let Some(slot) = slots.iter_mut().find(|s| s.label == label) {
-        slot.visible = false;
+    {
+        let stack = app.state::<ToastStack>();
+        let mut slots = stack.0.lock().unwrap();
+        if let Some(slot) = slots.iter_mut().find(|s| s.label == label) {
+            slot.visible = false;
+        }
+        relayout(app, &slots);
     }
-    relayout(app, &slots);
+
+    // Same as answering: dismissing a toast is a click on one of our windows.
+    #[cfg(target_os = "macos")]
+    crate::mac::runtime::step_back(app);
+
     info!(event_id = %event_id, "Toast hidden; request still pending");
 }
 
@@ -346,6 +364,12 @@ pub fn restore(app: &AppHandle, event: &AttentionEvent) -> bool {
 
 /// Open the dashboard, or focus it if it is already open.
 pub fn show_dashboard(app: &AppHandle) {
+    // With no Dock icon there is nothing for macOS to activate on the user's
+    // behalf, so an accessory app has to ask — otherwise the dashboard opens
+    // behind whatever they were looking at.
+    #[cfg(target_os = "macos")]
+    crate::mac::runtime::present(app);
+
     if let Some(window) = app.get_webview_window(DASHBOARD_LABEL) {
         let _ = window.show();
         let _ = window.unminimize();

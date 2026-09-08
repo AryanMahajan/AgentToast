@@ -16,6 +16,12 @@ mod remote;
 mod tray;
 mod window;
 
+/// Everything the macOS build does differently. Compiled only on macOS, so
+/// a Windows build is byte-for-byte the application it always was.
+#[cfg(target_os = "macos")]
+#[path = "../../macos/src/mod.rs"]
+mod mac;
+
 use agenttoast_core::config::AppConfig;
 use agenttoast_core::router::ActionRouter;
 use agenttoast_core::session::SessionRegistry;
@@ -45,6 +51,13 @@ fn main() {
         .init();
 
     info!("Starting AgentToast v{}", env!("CARGO_PKG_VERSION"));
+
+    // The built-in IPC default is a Windows named pipe, which names nothing on
+    // macOS. Write the socket into the config overlay before anything reads it:
+    // every bridge loads the same file, so this is what keeps the daemon and
+    // the bridges pointed at the same endpoint.
+    #[cfg(target_os = "macos")]
+    mac::bootstrap::ensure_socket_endpoint(&AppConfig::default().data_dir);
 
     let config = AppConfig::load();
     let sessions = SessionRegistry::new();
@@ -116,6 +129,12 @@ fn main() {
             commands::revoke_all_remote_devices,
         ])
         .setup(|app| {
+            // A Dock icon as well as the menu bar item. macOS silently drops
+            // menu bar items that do not fit, so the menu bar alone is not a
+            // reliable way back to the app. See `macos/src/runtime.rs`.
+            #[cfg(target_os = "macos")]
+            mac::runtime::show_in_dock(app);
+
             // A grant with no hook behind it is a standing instruction to
             // Antigravity to stop asking. Disconnect gives them back, but the
             // hooks file can also be edited, replaced or wiped by hand — so
@@ -161,6 +180,15 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Failed to build AgentToast")
         .run(|_app, event| {
+            // Clicking the app in Finder, Launchpad or Spotlight while it is
+            // already running does not start a second process on macOS, so the
+            // single-instance plugin above never hears about it. This is the
+            // event macOS sends instead.
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                mac::runtime::reopen(_app);
+            }
+
             // AgentToast lives in the tray with no persistent window. Tauri
             // exits once the last window closes, so dismissing the first toast
             // would otherwise take the daemon down with it. `code` is set only

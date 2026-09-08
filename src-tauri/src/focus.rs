@@ -43,6 +43,13 @@
 //! Terminal hosts with tabs can only be focused as a whole; there is no
 //! supported way to select the specific tab the session is running in.
 
+// macOS answers "what owns this session's window?" with different nouns and
+// a different search, so it brings its own implementation rather than sharing
+// this one — see `macos/src/focus.rs`. None of the Windows search below is
+// reachable there; it is left intact rather than cut into `#[cfg]` pieces so
+// that the Windows application reads exactly as it always has.
+#![cfg_attr(target_os = "macos", allow(dead_code, unused_imports))]
+
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tracing::{debug, info, warn};
 
@@ -159,6 +166,12 @@ fn pids_named(system: &System, names: &[&str]) -> Vec<u32> {
 /// Bring the terminal hosting `pid`'s session to the foreground.
 ///
 /// Returns whether anything was raised.
+#[cfg(target_os = "macos")]
+pub fn focus_agent_window(pid: u32) -> bool {
+    crate::mac::focus::focus_agent_window(pid)
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn focus_agent_window(pid: u32) -> bool {
     let mut system = System::new();
     system.refresh_processes_specifics(

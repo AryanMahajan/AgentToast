@@ -126,8 +126,10 @@ dashboard the first time they raise something.
 
 ## Requirements
 
-- **Windows 10 or 11.** The tray app, the named pipe and the window handling are
-  Windows-specific today. macOS and Linux are not supported.
+- **Windows 10 or 11**, or **macOS 10.15 or newer** (Apple silicon or Intel).
+  Both have a build on [Releases](../../releases). Windows is the platform this
+  was built on and the more exercised of the two; macOS has its own notes in
+  [`macos/README.md`](macos/README.md). Linux is not supported.
 - **At least one supported agent**:
   - **Claude Code**, with a version that supports the `PermissionRequest` hook, or
   - **Antigravity** (`agy`), with a version that supports `hooks.json`.
@@ -155,6 +157,15 @@ Then:
    when a session starts.
 
 That's it. Next time the agent needs your approval, you get a toast.
+
+**On macOS**, download the `.dmg` instead and drag AgentToast to Applications.
+It is not notarised, so Gatekeeper refuses a downloaded copy until you
+right-click → **Open** it once (or `xattr -dr com.apple.quarantine
+/Applications/AgentToast.app`). Building it yourself avoids that entirely and
+takes one command — `./macos/scripts/install.sh`. The steps after that are the
+same, except the tray icon is a menu bar item and the dashboard is reached from
+its menu rather than by left-clicking it. [`macos/README.md`](macos/README.md)
+covers the differences.
 
 ### Connecting one project instead of all of them
 
@@ -315,7 +326,7 @@ what that means.
 - **Nothing is exposed to the network unless you switch on the Remote tab**, which
   is off by default. When it is on, a paired phone can approve commands, so that
   surface is guarded by a per-device token delivered through one-time pairing, an
-  `HttpOnly; SameSite=Strict` cookie, a custom header no cross-origin request can
+  `HttpOnly; SameSite=Lax` cookie, a custom header no cross-origin request can
   set without a preflight this server refuses, and a `Host` check that rejects
   anything addressed by name rather than by IP — which is what a DNS-rebinding
   attack needs. What it is *not* guarded by is TLS: the traffic is plain HTTP, so
@@ -332,8 +343,8 @@ Needs [Rust](https://rustup.rs/) with the MSVC build tools, and
 [Node](https://nodejs.org/) 20 or newer for the front end.
 
 ```bash
-git clone https://github.com/AryanMahajan/claude_notifier
-cd claude_notifier
+git clone https://github.com/AryanMahajan/AgentToast
+cd AgentToast
 npm install
 
 # Run it — Vite serves the windows with hot reload
@@ -348,6 +359,13 @@ cargo tauri build --config src-tauri/tauri.bundle.conf.json
 ```
 
 The installer lands in `target/release/bundle/nsis/`.
+
+**On macOS the scripts in `macos/scripts/` do this instead** — `dev.sh` to run
+it, `install.sh` to build it into `/Applications`, `uninstall.sh` to take it
+back off. They exist because a Mac needs a step Windows does not: Launch
+Services indexes every bundle a build produces, so without cleaning up after
+itself you end up with several identical "AgentToast" entries in Spotlight, most
+pointing at stale copies. See [`macos/README.md`](macos/README.md).
 
 **The front end is built by Vite, into `dist/`.** `cargo tauri build` runs
 `npm run build` for you, so a checkout only needs `npm install` once. There are
@@ -376,7 +394,10 @@ file adds them only when packaging.
 
 Working and in daily use, but early. Known gaps:
 
-- **Windows only.**
+- **Windows and macOS.** Linux is not supported. Neither build is code-signed —
+  Windows warns about an unknown publisher, and macOS needs one right-click →
+  Open. macOS is the newer of the two and has its own known gaps, listed in
+  [`macos/README.md`](macos/README.md).
 - **Open Session** raises the right terminal window when it can identify it, and
   otherwise raises all of them so you can pick. It cannot switch to the right *tab*
   — no supported API for that.

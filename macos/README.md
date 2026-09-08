@@ -35,7 +35,12 @@ ask for one — see [Open Session](#open-session) for why.
 
 ## Install
 
-Build it yourself for now; there is no signed release build. See
+Download the `.dmg` from [Releases](../../releases) and drag AgentToast to
+Applications. It is universal, and it is not signed or notarised — Gatekeeper
+refuses a downloaded copy until you right-click → **Open** it once, or run
+`xattr -dr com.apple.quarantine /Applications/AgentToast.app`.
+
+To build it yourself instead — which avoids the quarantine flag altogether — see
 [Building](#building) below, then:
 
 ```bash
@@ -141,8 +146,8 @@ Needs [Rust](https://rustup.rs/) (1.88 or newer), [Node](https://nodejs.org/) 20
 or newer, and Xcode's command line tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/AryanMahajan/claude_notifier
-cd claude_notifier
+git clone https://github.com/AryanMahajan/AgentToast
+cd AgentToast
 npm install
 cargo install tauri-cli --version "^2" --locked   # or: cargo binstall
 

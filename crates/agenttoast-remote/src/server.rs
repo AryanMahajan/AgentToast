@@ -10,11 +10,18 @@
 //! - **A per-device token, delivered by pairing.** The QR carries a one-time
 //!   code, not the token; the token comes back in an `HttpOnly` cookie, so it
 //!   is never in a URL, a QR screenshot or the page's own JavaScript.
-//! - **`SameSite=Strict`.** Another site open on the same phone cannot make the
-//!   browser attach the cookie to a request it forged.
+//! - **`SameSite=Lax`.** Another site on the same phone cannot make the browser
+//!   attach the cookie to a request it forged: `Lax` withholds it from every
+//!   cross-site subresource request and from every cross-site `POST`, which is
+//!   all of the API. What it does allow is a plain top-level GET arriving from
+//!   elsewhere — a link to the dashboard — and the response to that is a page
+//!   the other site cannot read. `Strict` cannot be used, for the reason given
+//!   on [`redirect_home`].
 //! - **A custom header on every API call.** A cross-origin request carrying one
 //!   needs a CORS preflight, and nothing here answers a preflight — so a
-//!   malicious page cannot reach the API even by hand.
+//!   malicious page cannot reach the API even by hand. This is what actually
+//!   stops `/api/respond` being reachable from another page, independently of
+//!   the cookie policy.
 //! - **`Host` must be an IP literal.** DNS rebinding — where a hostile site
 //!   points its own domain at your LAN address so the browser treats it as
 //!   same-origin — needs a domain name to work. There isn't one to use.
@@ -275,10 +282,23 @@ async fn pair(
 /// Send the browser to `/`, optionally handing it its token on the way.
 ///
 /// `HttpOnly` keeps the token out of reach of the page's own script, so an
-/// injected script cannot exfiltrate it. `SameSite=Strict` is what stops
-/// another site on the same phone from riding the cookie. `Secure` is
-/// deliberately absent: this is plain HTTP, and a `Secure` cookie would simply
-/// never be stored.
+/// injected script cannot exfiltrate it. `Secure` is deliberately absent: this
+/// is plain HTTP, and a `Secure` cookie would simply never be stored.
+///
+/// # Why `Lax` and not `Strict`
+///
+/// Pairing is a QR code, so the pairing URL is opened *from somewhere else* —
+/// a camera app, a scanner, a chat message. That makes the whole navigation
+/// cross-site, and a browser withholds a `Strict` cookie from every request in
+/// a cross-site-initiated chain, including the redirect this hands back. The
+/// cookie was stored and then simply never sent: the device appeared in the
+/// dashboard as paired while the phone kept showing "pair this device from
+/// your PC", and its `last_seen_at` never moved off the moment it paired.
+///
+/// `Lax` is sent on a top-level GET navigation like this one, and withheld
+/// from exactly the requests that would matter to a forgery — cross-site
+/// subresource loads and cross-site `POST`s, which is every API call here. The
+/// custom header those also require is the real guard on the API.
 fn redirect_home(token: Option<&str>) -> Response {
     let mut response = HttpResponse::builder()
         .status(StatusCode::SEE_OTHER)
@@ -288,7 +308,7 @@ fn redirect_home(token: Option<&str>) -> Response {
         response = response.header(
             header::SET_COOKIE,
             format!(
-                "{COOKIE_NAME}={token}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict"
+                "{COOKIE_NAME}={token}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; SameSite=Lax"
             ),
         );
     }
@@ -460,6 +480,56 @@ fn device_name(headers: &HeaderMap) -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::header;
+
+    /// The pairing cookie has to survive being set on a navigation that started
+    /// somewhere else, because a QR code is always opened from somewhere else.
+    /// `Strict` does not: the browser stores it and then withholds it from the
+    /// redirect, which is how a phone ended up paired and still being asked to
+    /// pair.
+    #[test]
+    fn the_pairing_cookie_survives_arriving_from_a_qr_scanner() {
+        let response = redirect_home(Some("a-token"));
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("pairing hands the token back in a cookie")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        assert!(cookie.contains("SameSite=Lax"), "{cookie}");
+        assert!(!cookie.contains("SameSite=Strict"), "{cookie}");
+    }
+
+    /// The token must stay out of the page's own JavaScript, and out of a URL.
+    #[test]
+    fn the_pairing_cookie_is_not_readable_by_the_page() {
+        let response = redirect_home(Some("a-token"));
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        assert!(cookie.contains("HttpOnly"), "{cookie}");
+        assert!(cookie.contains("Path=/"), "{cookie}");
+        // `Secure` over plain HTTP would mean the cookie is never stored at all.
+        assert!(!cookie.contains("Secure"), "{cookie}");
+
+        let location = response.headers().get(header::LOCATION).unwrap();
+        assert_eq!(location, "/");
+        assert!(!location.to_str().unwrap().contains("a-token"));
+    }
+
+    /// Scanning the QR again when already paired must not mint a second token.
+    #[test]
+    fn going_home_without_pairing_sets_no_cookie() {
+        assert!(redirect_home(None).headers().get(header::SET_COOKIE).is_none());
+    }
+
     use super::*;
 
     fn headers_with(pairs: &[(&str, &str)]) -> HeaderMap {

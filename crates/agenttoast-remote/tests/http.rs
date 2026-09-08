@@ -160,7 +160,11 @@ impl Harness {
             .expect("pairing should set a cookie");
 
         assert!(cookie.contains("HttpOnly"), "cookie must be HttpOnly");
-        assert!(cookie.contains("SameSite=Strict"), "cookie must be SameSite=Strict");
+        // Not `Strict`: a QR code is scanned from another app, so pairing is
+        // always a cross-site-initiated navigation and a `Strict` cookie would
+        // be withheld from the very redirect it is handed back on. See
+        // `server::redirect_home`.
+        assert!(cookie.contains("SameSite=Lax"), "cookie must be SameSite=Lax");
 
         cookie
             .split(';')

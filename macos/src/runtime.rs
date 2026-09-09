@@ -36,6 +36,8 @@
 //! was using before. The Dock icon stays; the interruption does not.
 
 use objc2::MainThreadMarker;
+use tauri::utils::config::WindowEffectsConfig;
+use tauri::utils::{WindowEffect, WindowEffectState};
 use objc2_app_kit::NSApplication;
 use tauri::{App, AppHandle, Manager, Runtime};
 use tauri::tray::TrayIconBuilder;
@@ -183,4 +185,41 @@ pub fn present(app: &AppHandle) {
 pub fn reopen(app: &AppHandle) {
     info!("Reopened from the app icon");
     crate::window::show_dashboard(app);
+}
+
+/* ------------------------------------------------------------- appearance --- */
+
+/// Tells the front end it is running on macOS, before the page loads.
+///
+/// The stylesheet keys its glass treatment off `[data-platform="macos"]`, so
+/// Windows renders exactly what it always did — no cascade to fight, no
+/// runtime check in a shared component.
+///
+/// It has to be an injected script rather than an inline `<script>` in the
+/// HTML: the app's CSP is `script-src 'self'`, which blocks inline script
+/// outright. Injected before page load, so there is no flash of the
+/// un-glassed design first.
+pub const PLATFORM_SCRIPT: &str = r#"document.documentElement.dataset.platform = "macos";"#;
+
+/// Real macOS vibrancy behind a window.
+///
+/// `UnderWindowBackground` is the material AppKit uses for a document window's
+/// own background — it samples the desktop behind the window rather than
+/// tinting a flat colour, which is the whole difference between glass and a
+/// translucent rectangle.
+///
+/// `FollowsWindowActiveState` is what stops it looking wrong when the window is
+/// not frontmost: macOS desaturates an inactive window's material, and a pane
+/// that stayed vivid while everything around it dimmed would read as a bug.
+///
+/// The webview above this has to be transparent for any of it to show, which is
+/// why the caller pairs it with a transparent window and why the stylesheet
+/// leaves `body` unpainted on macOS.
+pub fn glass() -> WindowEffectsConfig {
+    WindowEffectsConfig {
+        effects: vec![WindowEffect::UnderWindowBackground],
+        state: Some(WindowEffectState::FollowsWindowActiveState),
+        radius: None,
+        color: None,
+    }
 }

@@ -154,6 +154,14 @@ pub fn show_toast(
         .background_color(Color(0, 0, 0, 0))
         .visible(false);
 
+    // The card is styled as glass on macOS; the window itself stays plain.
+    // Most of it is transparent gutter for the shadow and the slide-in, and a
+    // window-wide material would blur that gutter into a grey rectangle.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.initialization_script(crate::mac::runtime::PLATFORM_SCRIPT);
+    }
+
     if let Some((x, y)) = origin {
         builder = builder.position(x, y);
     }
@@ -377,7 +385,7 @@ pub fn show_dashboard(app: &AppHandle) {
         return;
     }
 
-    match WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         DASHBOARD_LABEL,
         WebviewUrl::App("dashboard.html".into()),
@@ -389,8 +397,18 @@ pub fn show_dashboard(app: &AppHandle) {
     // which is where a first run lands.
     .inner_size(620.0, 640.0)
     .min_inner_size(420.0, 320.0)
-    .resizable(true)
-    .build()
+    .resizable(true);
+
+    // Vibrancy needs somewhere to show through: a transparent window, a
+    // transparent webview, and a stylesheet that leaves the background unpainted.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .initialization_script(crate::mac::runtime::PLATFORM_SCRIPT)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .effects(crate::mac::runtime::glass());
+
+    match builder.build()
     {
         Ok(_) => info!("Dashboard opened"),
         Err(e) => warn!(error = %e, "Failed to open dashboard"),

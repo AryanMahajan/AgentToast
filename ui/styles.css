@@ -430,3 +430,38 @@ body {
         outline-offset: 1px;
     }
 }
+
+/* ---------------------------------------------------------------- macOS --- */
+
+/* The toast keeps its own card rather than borrowing the window's material.
+   Most of this window is transparent gutter — room for the shadow and the
+   34px slide-in — so an AppKit vibrancy layer would blur that gutter too and
+   put a grey rectangle on screen around the card. `backdrop-filter` blurs
+   only what is behind the element, which is exactly the card.
+
+   `saturate` is not decoration: blurring alone washes the colour out of what
+   is behind, and lifting it back is what separates glass from frosted plastic.
+   It is how AppKit's own materials are built. */
+:root[data-platform='macos'] .toast {
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    backdrop-filter: blur(28px) saturate(180%);
+}
+
+/* The highlight along the top edge, where real glass catches the light. Drawn
+   as an inset shadow rather than a border so it costs no layout and cannot
+   shift the card by a pixel. */
+:root[data-platform='macos'] .toast {
+    box-shadow:
+        var(--shadow),
+        inset 0 0.5px 0 var(--glass-edge);
+}
+
+/* A browser that cannot blur would leave a see-through card with the desktop
+   showing through unblurred, which is worse than no glass at all. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :root[data-platform='macos'] .toast {
+        background: var(--surface-solid);
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+}

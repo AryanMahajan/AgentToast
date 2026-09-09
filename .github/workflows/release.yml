@@ -88,6 +88,8 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    outputs:
+      signed: ${{ steps.build.outputs.signed }}
 
     steps:
       - uses: actions/checkout@v4
@@ -124,8 +126,92 @@ jobs:
       # bundle targets and the bridges under the names they have here, and the
       # bridges have to be built for the same target as the app or an Intel Mac
       # gets an app it can run and two bridges it cannot. See the script.
+      #
+      # Signing and notarising are what make the disk image something a stranger
+      # can actually open. Without them Gatekeeper refuses a downloaded copy
+      # outright, and the only way past is a Terminal command — which is a fine
+      # ask of a contributor and an unreasonable one of a user.
+      #
+      # The Tauri CLI reads all of these itself: given APPLE_CERTIFICATE it
+      # imports the .p12 into a temporary keychain, signs the app with the
+      # hardened runtime, and then submits the disk image to Apple and staples
+      # the ticket. Every one is optional. A fork, or a repository whose
+      # maintainer has no Apple Developer account, has none of these secrets
+      # set, and the build falls back to exactly what it did before — unsigned,
+      # still installable, just with the quarantine dance.
       - name: Build the app and the disk image
-        run: ./macos/scripts/build.sh --target universal-apple-darwin
+        id: build
+        env:
+          # Signing. APPLE_SIGNING_IDENTITY looks like
+          # "Developer ID Application: Your Name (TEAMID)".
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarising, with an App Store Connect API key. Preferred over an
+          # Apple ID and app-specific password because it does not carry a
+          # person's account credentials through CI.
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ github.workspace }}/apple-api-key.p8
+          # Through the environment, never interpolated into the script body: a
+          # `${{ }}` expansion is pasted in as literal text before the shell
+          # runs, so a key containing a quote would break the script and a
+          # hostile value could extend it.
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Apple signing secrets are set; building unsigned."
+          fi
+
+          # The CLI wants the notarisation key as a file on disk, and the secret
+          # holds its contents. Written outside the bundle and deleted below.
+          if [ -n "${APPLE_API_KEY_CONTENT:-}" ]; then
+            printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY_PATH"
+            chmod 600 "$APPLE_API_KEY_PATH"
+          else
+            unset APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
+          fi
+
+          # Removed however the build ends, so a failure cannot leave a private
+          # key sitting in the workspace for a later step to pick up.
+          trap 'rm -f "${{ github.workspace }}/apple-api-key.p8"' EXIT
+
+          ./macos/scripts/build.sh --target universal-apple-darwin
+
+      # Proves the artifact is what the release notes will claim it is. An
+      # unsigned build is allowed through; a build that was *meant* to be signed
+      # and came out unsigned is not, because that only shows up later as a
+      # user being told the app is damaged.
+      - name: Check the signature
+        run: |
+          set -euo pipefail
+          app=target/universal-apple-darwin/release/bundle/macos/AgentToast.app
+
+          echo "== architectures =="
+          lipo -archs "$app/Contents/MacOS/agenttoast"
+          for bridge in "$app"/Contents/Resources/agenttoast-bridge-*; do
+            echo "$(basename "$bridge"): $(lipo -archs "$bridge")"
+          done
+
+          if [ "${{ steps.build.outputs.signed }}" != "true" ]; then
+            echo "Unsigned build; skipping signature checks."
+            exit 0
+          fi
+
+          echo "== signature =="
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=4 "$app" 2>&1 | grep -E "Authority|Identifier|flags"
+
+          # `spctl` is the check Gatekeeper itself makes. It only passes once the
+          # notarisation ticket is stapled, so this is the real gate on whether a
+          # download will open without a warning.
+          echo "== gatekeeper =="
+          spctl --assess --type execute --verbose=4 "$app"
 
       - name: Upload the disk image as a build artifact
         uses: actions/upload-artifact@v4
@@ -168,15 +254,10 @@ jobs:
             Download the `.dmg` below and drag AgentToast to Applications. It is
             universal — Apple silicon and Intel — and needs macOS 10.15 or newer.
 
-            The build is **not signed or notarised**, so Gatekeeper will refuse a
-            copy that was downloaded. The way past it is right-click → **Open**
-            the first time, or:
+            ${{ needs.macos.outputs.signed == 'true' && 'Signed and notarised, so it opens the way any other app does.' || 'This build is **not signed or notarised**, so Gatekeeper will refuse a downloaded copy. Right-click → **Open** the first time, or run `xattr -dr com.apple.quarantine /Applications/AgentToast.app`. If you would rather not, build it yourself — see `macos/README.md`.' }}
 
-            ```
-            xattr -dr com.apple.quarantine /Applications/AgentToast.app
-            ```
-
-            If you would rather not, build it yourself — `macos/README.md`.
+            AgentToast lives in the Dock and the menu bar; open the dashboard
+            from either.
 
             ## Then, on either
 

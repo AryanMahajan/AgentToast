@@ -31,15 +31,21 @@
 //! macOS brings AgentToast to the front and leaves it there once the toast has
 //! gone — which reads as the app opening itself for no reason.
 //!
-//! [`step_back`] pays it back. Once nothing of ours is on screen any more,
-//! AgentToast hides itself, and macOS hands the foreground to whatever the user
-//! was using before. The Dock icon stays; the interruption does not.
+//! [`step_back`] pays it back, by putting whichever application was in front
+//! before the toast appeared back in front afterwards. Nothing about answering
+//! a toast is a request to switch application. The Dock icon stays; the
+//! interruption does not.
 
 use objc2::MainThreadMarker;
-use objc2_app_kit::NSApplication;
-use tauri::{App, AppHandle, Manager, Runtime};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationOptions, NSRunningApplication, NSWorkspace,
+};
+use std::sync::Mutex;
 use tauri::tray::TrayIconBuilder;
-use tracing::{info, warn};
+use tauri::utils::config::WindowEffectsConfig;
+use tauri::utils::{WindowEffect, WindowEffectState};
+use tauri::{App, AppHandle, Manager, Runtime};
+use tracing::{debug, info, warn};
 
 /// Keep AgentToast in the Dock as well as the menu bar.
 ///
@@ -51,34 +57,86 @@ pub fn show_in_dock(app: &mut App) {
     info!("Running with a Dock icon and a menu bar item");
 }
 
-/// Give the foreground back once nothing of ours is on screen.
+/// Remember which application had the foreground, before a toast can take it.
 ///
-/// Answering a toast means clicking an AgentToast window, and clicking a
-/// regular application's window activates that application. Without this the
-/// user is left looking at AgentToast every time they approve something.
+/// Called as a toast is created. Answering it is a click on an AgentToast
+/// window, and clicking a regular application's window activates that
+/// application — so by the time the answer is in, the information needed to
+/// undo that is already gone. It has to be captured up front.
 ///
-/// Hiding is the whole mechanism: `NSApplication.hide` deactivates us and macOS
-/// promotes whatever was in front before, which is where the user actually
-/// wants to be. It only runs when there is nothing left to look at — another
-/// toast still waiting, or an open dashboard, means hiding would take away a
-/// window the user can still see.
-pub fn step_back(app: &AppHandle) {
-    if is_showing_something(app) {
-        return;
-    }
+/// AgentToast itself is never recorded. If the user was already looking at the
+/// dashboard when the toast arrived, then AgentToast being in front afterwards
+/// is where they were, not an interruption.
+pub fn remember_foreground(app: &AppHandle) {
+    // `NSWorkspace` is main-thread only and a toast is created from the IPC
+    // daemon's thread, so the read is hopped rather than skipped. Landing a
+    // moment later is harmless: the toast window is built unfocused, so it
+    // cannot have changed the answer, and the user cannot have clicked it yet.
+    let _ = app.run_on_main_thread(|| {
+        let pid = NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|app| app.processIdentifier());
 
-    // `hide` is main-thread only, and toasts are closed from the IPC daemon's
-    // thread once a bridge is answered.
+        let ours = std::process::id() as i32;
+        *PREVIOUS.lock().unwrap() = pid.filter(|p| *p != ours);
+    });
+}
+
+/// The application that was in front when the last toast appeared.
+static PREVIOUS: Mutex<Option<i32>> = Mutex::new(None);
+
+/// Give the foreground back after a toast is answered or dismissed.
+///
+/// Nothing about answering a toast is a request to switch application, so the
+/// application that was in front before it appeared is put back in front. That
+/// is a narrower instrument than `NSApplication.hide`, which was what this used
+/// to do: hiding takes away *every* window, so an open dashboard would vanish
+/// underneath the user for the crime of approving something while it happened
+/// to be on screen — and it did nothing at all in that case, because it had to
+/// decline whenever any window was visible.
+///
+/// Falls back to hiding only when there is nobody to hand back to and nothing
+/// of ours left on screen, which is the case where hiding is unambiguous.
+pub fn step_back(app: &AppHandle) {
+    let previous = *PREVIOUS.lock().unwrap();
     let handle = app.clone();
+
+    // Both AppKit calls below are main-thread only, and a toast is closed from
+    // the IPC daemon's thread once its bridge has been answered.
     let _ = app.run_on_main_thread(move || {
-        // Re-checked on the main thread: a toast can arrive between the two.
-        if is_showing_something(&handle) {
+        // Someone else is already in front — the user moved on while the toast
+        // was up, and pulling them anywhere would be the interruption.
+        if !frontmost_is_ours() {
             return;
         }
-        if let Err(e) = handle.hide() {
-            warn!(error = %e, "Could not give the foreground back");
+
+        if let Some(pid) = previous {
+            if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+                #[allow(deprecated)]
+                let restored =
+                    app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
+                if restored {
+                    return;
+                }
+                debug!(pid, "Could not reactivate the previous application");
+            }
+        }
+
+        // Nobody to go back to. Standing aside is still better than staying in
+        // front, but only when there is nothing of ours left to look at.
+        if !is_showing_something(&handle) {
+            if let Err(e) = handle.hide() {
+                warn!(error = %e, "Could not stand down");
+            }
         }
     });
+}
+
+/// Whether AgentToast is the application currently in front.
+fn frontmost_is_ours() -> bool {
+    NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .is_some_and(|app| app.processIdentifier() == std::process::id() as i32)
 }
 
 /// Whether any window the user can actually see belongs to us.
@@ -183,4 +241,41 @@ pub fn present(app: &AppHandle) {
 pub fn reopen(app: &AppHandle) {
     info!("Reopened from the app icon");
     crate::window::show_dashboard(app);
+}
+
+/* ------------------------------------------------------------- appearance --- */
+
+/// Tells the front end it is running on macOS, before the page loads.
+///
+/// The stylesheet keys its glass treatment off `[data-platform="macos"]`, so
+/// Windows renders exactly what it always did — no cascade to fight, no
+/// runtime check in a shared component.
+///
+/// It has to be an injected script rather than an inline `<script>` in the
+/// HTML: the app's CSP is `script-src 'self'`, which blocks inline script
+/// outright. Injected before page load, so there is no flash of the
+/// un-glassed design first.
+pub const PLATFORM_SCRIPT: &str = r#"document.documentElement.dataset.platform = "macos";"#;
+
+/// Real macOS vibrancy behind a window.
+///
+/// `UnderWindowBackground` is the material AppKit uses for a document window's
+/// own background — it samples the desktop behind the window rather than
+/// tinting a flat colour, which is the whole difference between glass and a
+/// translucent rectangle.
+///
+/// `FollowsWindowActiveState` is what stops it looking wrong when the window is
+/// not frontmost: macOS desaturates an inactive window's material, and a pane
+/// that stayed vivid while everything around it dimmed would read as a bug.
+///
+/// The webview above this has to be transparent for any of it to show, which is
+/// why the caller pairs it with a transparent window and why the stylesheet
+/// leaves `body` unpainted on macOS.
+pub fn glass() -> WindowEffectsConfig {
+    WindowEffectsConfig {
+        effects: vec![WindowEffect::UnderWindowBackground],
+        state: Some(WindowEffectState::FollowsWindowActiveState),
+        radius: None,
+        color: None,
+    }
 }

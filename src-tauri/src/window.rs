@@ -125,6 +125,12 @@ pub fn show_toast(
         return Ok(());
     }
 
+    // Note who is in front before the toast can take it: answering one is a
+    // click on our window, which activates us, and undoing that afterwards
+    // needs to know where to hand the foreground back to.
+    #[cfg(target_os = "macos")]
+    crate::mac::runtime::remember_foreground(app);
+
     // Reserve the slot first so the window is born at its final anchor.
     let origin = {
         let stack = app.state::<ToastStack>();

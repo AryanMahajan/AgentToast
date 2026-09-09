@@ -150,14 +150,21 @@ async fn raise_toast(
     auth_token: &str,
     event: Option<agenttoast_core::event::AttentionEvent>,
 ) -> Result<()> {
-    let Some(event) = event else {
+    let Some(mut event) = event else {
         debug!("Nothing worth a toast");
         return Ok(());
     };
 
+    // The only action on one of these is "Open Session", and raising the
+    // session's window needs to know which process it is. Without this the
+    // daemon gets no pid, falls back to zero, and the button does nothing at
+    // all. The Antigravity bridge has always set it here for the same reason.
+    event.process_id = agent_pid();
+
     info!(
         session_id = %event.session_id,
         state = ?event.state,
+        pid = ?event.process_id,
         message = %event.message,
         "Raising an unprompted toast"
     );

@@ -1,7 +1,7 @@
 {
   "name": "agenttoast-ui",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "Front end for the AgentToast windows: the dashboard and the toast",
   "scripts": {
